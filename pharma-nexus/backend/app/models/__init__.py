@@ -9,6 +9,7 @@ from app.models.literature import Literature, LiteratureTarget, LiteratureCancer
 from app.models.clinical_trial import ClinicalTrial
 from app.models.ingestion_log import IngestionLog
 from app.models.expression_cache import ExpressionScoreCache
+from app.models.scoring_config import ScoringWeight
 
 __all__ = [
     "Drug",
@@ -32,4 +33,5 @@ __all__ = [
     "TrialDrug",
     "IngestionLog",
     "ExpressionScoreCache",
+    "ScoringWeight",
 ]

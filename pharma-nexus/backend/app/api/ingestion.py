@@ -17,6 +17,7 @@ VALID_SOURCES = {
     "all_literature", "knowledge_graph",
     "differential_expression", "expression_scores", "pathway_activity",
     "full_expression_analysis",
+    "hypotheses_cancer", "hypotheses_drug", "hypotheses_all", "rescore_hypotheses",
 }
 
 
@@ -28,6 +29,9 @@ class IngestionRequest(BaseModel):
     pmid_list: list[str] | None = None  # For literature_analysis
     limit: int | None = None  # For literature_analysis batch size
     cancer_type_id: int | None = None  # For expression analysis tasks
+    drug_id: int | None = None  # For hypothesis generation per drug
+    min_score: float | None = None  # For hypothesis generation threshold
+    preset_name: str | None = None  # For hypothesis rescoring
 
 
 @router.post("/start")
@@ -69,6 +73,10 @@ async def start_ingestion(request: IngestionRequest):
         "expression_scores": "app.tasks.analyze.compute_drug_expression_scores",
         "pathway_activity": "app.tasks.analyze.compute_pathway_activities",
         "full_expression_analysis": "app.tasks.analyze.run_full_expression_analysis",
+        "hypotheses_cancer": "app.tasks.generate.generate_hypotheses_for_cancer",
+        "hypotheses_drug": "app.tasks.generate.generate_hypotheses_for_drug",
+        "hypotheses_all": "app.tasks.generate.generate_all_hypotheses",
+        "rescore_hypotheses": "app.tasks.generate.rescore_hypotheses",
     }
 
     task_name = task_map[source]
@@ -89,6 +97,14 @@ async def start_ingestion(request: IngestionRequest):
         "pathway_activity", "full_expression_analysis",
     ) and request.cancer_type_id:
         kwargs["cancer_type_id"] = request.cancer_type_id
+    if source == "hypotheses_cancer" and request.cancer_type_id:
+        kwargs["cancer_type_id"] = request.cancer_type_id
+    if source == "hypotheses_drug" and request.drug_id:
+        kwargs["drug_id"] = request.drug_id
+    if source in ("hypotheses_cancer", "hypotheses_drug", "hypotheses_all") and request.min_score:
+        kwargs["min_score"] = request.min_score
+    if source == "rescore_hypotheses" and request.preset_name:
+        kwargs["preset_name"] = request.preset_name
 
     task = celery_app.send_task(task_name, kwargs=kwargs)
     return {"task_id": task.id, "status": "queued", "source": source}
