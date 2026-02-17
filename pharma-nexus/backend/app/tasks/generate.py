@@ -6,6 +6,8 @@ Tasks:
   - generate_all_hypotheses: Generate hypotheses for all cancer types
   - rescore_hypotheses: Rescore all hypotheses with current/new weights
   - run_confidence_batch: Run confidence-only LLM assessment (cheapest feedback loop)
+  - run_synthesis_discovery: LLM literature synthesis discovery (Strategy 7)
+  - promote_proposals: Promote discovery proposals into hypothesis pipeline
 """
 
 import asyncio
@@ -327,4 +329,91 @@ def run_confidence_batch(self, min_score=0.0, limit=200, cost_mode=None):
 
     except Exception as exc:
         logger.error("Confidence batch failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.tasks.generate.run_synthesis_discovery",
+)
+def run_synthesis_discovery(
+    self, cancer_type_ids=None, limit=10, cost_mode=None
+):
+    """Run LLM literature synthesis discovery (Strategy 7).
+
+    The novel part: Claude reads papers about cancer types and drug
+    mechanisms, then reasons about implicit connections that no
+    structured database captures.
+    """
+    logger.info(
+        "Starting synthesis discovery (cancer_types=%s, limit=%d, cost_mode=%s)",
+        cancer_type_ids or "auto-select",
+        limit,
+        cost_mode or "from settings",
+    )
+    try:
+
+        async def _discover():
+            from app.database import async_session_factory
+            from app.services.synthesis_discovery import SynthesisDiscovery
+
+            svc = SynthesisDiscovery(cost_mode=cost_mode)
+            async with async_session_factory() as session:
+                return await svc.discover_batch(
+                    session,
+                    cancer_type_ids=cancer_type_ids,
+                    limit=limit,
+                )
+
+        result = _run_async(_discover())
+        logger.info(
+            "Synthesis discovery complete: %d proposals across %d cancer types ($%.4f)",
+            result["total_proposals"],
+            result["cancer_types_processed"],
+            result["total_cost_usd"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("Synthesis discovery failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.tasks.generate.promote_proposals",
+)
+def promote_proposals(self, min_confidence=0.5, limit=50):
+    """Promote LLM discovery proposals into the hypothesis scoring pipeline."""
+    logger.info(
+        "Promoting proposals (min_confidence=%.2f, limit=%d)",
+        min_confidence,
+        limit,
+    )
+    try:
+
+        async def _promote():
+            from app.database import async_session_factory
+            from app.services.synthesis_discovery import SynthesisDiscovery
+
+            svc = SynthesisDiscovery()
+            async with async_session_factory() as session:
+                return await svc.promote_proposals(
+                    session,
+                    min_confidence=min_confidence,
+                    limit=limit,
+                )
+
+        result = _run_async(_promote())
+        logger.info(
+            "Promotion complete: %d/%d promoted",
+            result["promoted"],
+            result["total_proposals"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("Proposal promotion failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))

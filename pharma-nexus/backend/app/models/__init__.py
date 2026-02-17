@@ -13,6 +13,7 @@ from app.models.scoring_config import ScoringWeight
 from app.models.llm_analysis import HypothesisAnalysis, LLMUsageLog
 from app.models.report_cache import ReportCache
 from app.models.validation import HypothesisOutcome, ValidationCase
+from app.models.discovery import LLMDiscoveryProposal
 
 __all__ = [
     "Drug",
@@ -42,4 +43,5 @@ __all__ = [
     "ReportCache",
     "ValidationCase",
     "HypothesisOutcome",
+    "LLMDiscoveryProposal",
 ]

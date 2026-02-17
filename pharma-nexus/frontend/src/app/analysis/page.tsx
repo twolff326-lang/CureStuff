@@ -184,6 +184,21 @@ export default function AnalysisPage() {
           body.cost_mode = costMode;
           label = `LLM Confidence Assessment (${costMode})`;
           break;
+        case "discovery":
+          endpoint = "/api/discovery/run";
+          body.cost_mode = costMode;
+          body.limit = 10;
+          if (selectedCancer) {
+            body.cancer_type_id = Number(selectedCancer);
+          }
+          label = `LLM Synthesis Discovery (${costMode})`;
+          break;
+        case "promote":
+          endpoint = "/api/discovery/promote";
+          body.min_confidence = 0.5;
+          body.limit = 50;
+          label = "Promote Proposals → Hypotheses";
+          break;
         default:
           return;
       }
@@ -286,8 +301,8 @@ export default function AnalysisPage() {
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      {/* Standard Actions */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <ActionCard
           title="Generate Hypotheses"
           description={
@@ -321,6 +336,25 @@ export default function AnalysisPage() {
           onClick={() => submitJob("confidence")}
           loading={submitting === "confidence"}
           accent
+        />
+      </div>
+
+      {/* Novel Discovery Actions */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <ActionCard
+          title="LLM Discovery"
+          description={`Read papers + drug mechanisms, reason about implicit connections (${costMode})`}
+          buttonLabel="Discover Novel Pairs"
+          onClick={() => submitJob("discovery")}
+          loading={submitting === "discovery"}
+          accent
+        />
+        <ActionCard
+          title="Promote Proposals"
+          description="Push high-confidence LLM proposals into the hypothesis scoring pipeline"
+          buttonLabel="Promote to Hypotheses"
+          onClick={() => submitJob("promote")}
+          loading={submitting === "promote"}
         />
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 flex flex-col">
           <h3 className="text-sm font-medium text-slate-800 mb-1">
