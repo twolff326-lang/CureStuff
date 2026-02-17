@@ -407,8 +407,14 @@ class SynthesisDiscovery:
         self,
         cancer_type_id: int,
         session: AsyncSession,
+        verify: bool = False,
     ) -> dict[str, Any]:
         """Run LLM synthesis discovery for a single cancer type.
+
+        Args:
+            cancer_type_id: Cancer type to discover for.
+            session: Database session.
+            verify: If True, run multi-round verification on each proposal.
 
         Returns summary of proposals generated.
         """
@@ -510,7 +516,52 @@ class SynthesisDiscovery:
             cost,
         )
 
-        return {
+        top_proposals = [
+            {
+                "drug_id": p.drug_id,
+                "confidence": p.confidence,
+                "rationale": p.mechanism_rationale[:200],
+            }
+            for p in sorted(stored, key=lambda x: x.confidence, reverse=True)[:5]
+        ]
+
+        # Optionally run multi-round verification on stored proposals
+        verification_results = []
+        verification_cost = 0.0
+        if verify and stored:
+            from app.services.discovery_verification import ProposalVerifier
+
+            verifier = ProposalVerifier(cost_mode=self._cost_mode)
+            for proposal in sorted(stored, key=lambda x: x.confidence, reverse=True)[:5]:
+                # Get drug name
+                drug_result = await session.execute(
+                    select(Drug.name).where(Drug.id == proposal.drug_id)
+                )
+                drug_name = drug_result.scalar_one_or_none() or f"Drug#{proposal.drug_id}"
+
+                proposal_dict = {
+                    "drug_name": drug_name,
+                    "drug_id": proposal.drug_id,
+                    "mechanism_rationale": proposal.mechanism_rationale,
+                    "transitive_chain": proposal.transitive_chain or [],
+                    "key_papers": proposal.key_papers or [],
+                    "inferred_pathways": proposal.inferred_pathways or [],
+                    "confidence": proposal.confidence,
+                }
+
+                try:
+                    v_result = await verifier.verify_proposal(
+                        proposal_dict, cancer_type_id, cancer_context, session
+                    )
+                    verification_results.append(v_result)
+                    verification_cost += v_result.get("cost_usd", 0)
+                except Exception as e:
+                    logger.warning(
+                        "Verification failed for proposal drug_id=%d: %s",
+                        proposal.drug_id, e,
+                    )
+
+        summary: dict[str, Any] = {
             "cancer_type": cancer_context["name"],
             "cancer_type_id": cancer_type_id,
             "batch_id": batch_id,
@@ -518,16 +569,21 @@ class SynthesisDiscovery:
             "raw_proposals": len(raw_proposals),
             "filtered_out": len(raw_proposals) - len(stored),
             "model": result["model"],
-            "cost_usd": round(cost, 4),
-            "top_proposals": [
-                {
-                    "drug_id": p.drug_id,
-                    "confidence": p.confidence,
-                    "rationale": p.mechanism_rationale[:200],
-                }
-                for p in sorted(stored, key=lambda x: x.confidence, reverse=True)[:5]
-            ],
+            "cost_usd": round(cost + verification_cost, 4),
+            "top_proposals": top_proposals,
         }
+
+        if verify:
+            summary["verification"] = {
+                "proposals_verified": len(verification_results),
+                "verification_cost_usd": round(verification_cost, 4),
+                "results": verification_results,
+                "proposals_passing": sum(
+                    1 for v in verification_results if v.get("should_proceed")
+                ),
+            }
+
+        return summary
 
     async def discover_batch(
         self,
