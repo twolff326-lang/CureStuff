@@ -38,6 +38,7 @@ class Hypothesis(Base):
     safety_score = Column(Float)
     novelty_score = Column(Float)
     status = Column(String(20), nullable=False, default="generated", index=True)
+    critique = Column(JSONB)
     reviewer_notes = Column(Text)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(

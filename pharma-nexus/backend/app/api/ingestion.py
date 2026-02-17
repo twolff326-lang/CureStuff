@@ -18,6 +18,7 @@ VALID_SOURCES = {
     "differential_expression", "expression_scores", "pathway_activity",
     "full_expression_analysis",
     "hypotheses_cancer", "hypotheses_drug", "hypotheses_all", "rescore_hypotheses",
+    "llm_narratives", "llm_full_analysis", "llm_comparative", "llm_single_analysis",
 }
 
 
@@ -32,6 +33,8 @@ class IngestionRequest(BaseModel):
     drug_id: int | None = None  # For hypothesis generation per drug
     min_score: float | None = None  # For hypothesis generation threshold
     preset_name: str | None = None  # For hypothesis rescoring
+    hypothesis_id: int | None = None  # For single LLM analysis
+    analysis_type: str | None = None  # For single LLM analysis type
 
 
 @router.post("/start")
@@ -77,6 +80,10 @@ async def start_ingestion(request: IngestionRequest):
         "hypotheses_drug": "app.tasks.generate.generate_hypotheses_for_drug",
         "hypotheses_all": "app.tasks.generate.generate_all_hypotheses",
         "rescore_hypotheses": "app.tasks.generate.rescore_hypotheses",
+        "llm_narratives": "app.tasks.analyze.generate_narratives_batch",
+        "llm_full_analysis": "app.tasks.analyze.generate_full_analysis_batch",
+        "llm_comparative": "app.tasks.analyze.generate_comparative_analyses",
+        "llm_single_analysis": "app.tasks.analyze.generate_single_analysis",
     }
 
     task_name = task_map[source]
@@ -105,6 +112,20 @@ async def start_ingestion(request: IngestionRequest):
         kwargs["min_score"] = request.min_score
     if source == "rescore_hypotheses" and request.preset_name:
         kwargs["preset_name"] = request.preset_name
+    if source in ("llm_narratives", "llm_full_analysis") and request.min_score:
+        kwargs["min_score"] = request.min_score
+    if source in ("llm_narratives", "llm_full_analysis") and request.limit:
+        kwargs["limit"] = request.limit
+    if source == "llm_comparative":
+        if request.cancer_type_id:
+            kwargs["cancer_type_id"] = request.cancer_type_id
+        if request.min_score:
+            kwargs["min_score"] = request.min_score
+    if source == "llm_single_analysis":
+        if request.hypothesis_id:
+            kwargs["hypothesis_id"] = request.hypothesis_id
+        if request.analysis_type:
+            kwargs["analysis_type"] = request.analysis_type
 
     task = celery_app.send_task(task_name, kwargs=kwargs)
     return {"task_id": task.id, "status": "queued", "source": source}

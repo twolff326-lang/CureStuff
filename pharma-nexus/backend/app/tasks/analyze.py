@@ -1,10 +1,16 @@
-"""Celery tasks for running gene expression analyses.
+"""Celery tasks for running gene expression analyses and LLM-powered analyses.
 
-Tasks:
+Tasks (expression):
   - compute_all_differential_expression: DE analysis for all 33 cancer types
   - compute_drug_expression_scores: Score drug-cancer pairs on expression compatibility
   - compute_pathway_activities: Pathway activity scores for all pathway-cancer combos
   - run_full_expression_analysis: Complete pipeline combining all analyses
+
+Tasks (LLM analysis):
+  - generate_narratives_batch: Mechanistic narratives for top hypotheses
+  - generate_full_analysis_batch: All 6 analysis types for top hypotheses
+  - generate_comparative_analyses: Comparative analyses grouped by cancer type
+  - generate_single_analysis: One specific analysis type for one hypothesis
 """
 
 import asyncio
@@ -326,3 +332,197 @@ def run_full_expression_analysis(cancer_type_id=None):
         "drug_scoring_task_id": drug_result.id,
         "pathway_activity_task_id": pathway_result.id,
     }
+
+
+# ------------------------------------------------------------------
+# LLM-powered analysis tasks
+# ------------------------------------------------------------------
+
+
+@celery_app.task(
+    bind=True, max_retries=1, name="app.tasks.analyze.generate_narratives_batch"
+)
+def generate_narratives_batch(self, min_score=0.0, limit=100):
+    """Generate mechanistic narratives for top hypotheses without one.
+
+    Uses Claude Sonnet for bulk, Claude Opus for top hypotheses (score >= 70).
+    """
+    logger.info(
+        "Starting narrative batch generation (min_score=%.1f, limit=%d)",
+        min_score,
+        limit,
+    )
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.llm_analyst import LLMAnalyst
+
+            analyst = LLMAnalyst()
+            async with async_session_factory() as session:
+                results = await analyst.generate_narratives_batch(
+                    session, min_score=min_score, limit=limit
+                )
+                await session.commit()
+            return results
+
+        results = _run_async(_generate())
+        logger.info(
+            "Narrative batch complete: %d/%d generated, %d errors",
+            results["completed"],
+            results["total"],
+            len(results["errors"]),
+        )
+        return results
+
+    except Exception as exc:
+        logger.error("Narrative batch generation failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True, max_retries=1, name="app.tasks.analyze.generate_full_analysis_batch"
+)
+def generate_full_analysis_batch(self, min_score=50.0, limit=20):
+    """Generate all 6 analysis types for top hypotheses.
+
+    Each hypothesis gets: narrative, critique, comparative, literature_synthesis,
+    experiment_design, and confidence assessment.
+    """
+    logger.info(
+        "Starting full analysis batch (min_score=%.1f, limit=%d)",
+        min_score,
+        limit,
+    )
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.llm_analyst import LLMAnalyst
+
+            analyst = LLMAnalyst()
+            async with async_session_factory() as session:
+                results = await analyst.generate_full_analysis_batch(
+                    session, min_score=min_score, limit=limit
+                )
+                await session.commit()
+            return results
+
+        results = _run_async(_generate())
+        logger.info(
+            "Full analysis batch complete: %d/%d generated, %d errors",
+            results["completed"],
+            results["total"],
+            len(results["errors"]),
+        )
+        return results
+
+    except Exception as exc:
+        logger.error("Full analysis batch failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True, max_retries=1, name="app.tasks.analyze.generate_comparative_analyses"
+)
+def generate_comparative_analyses(self, cancer_type_id=None, min_score=30.0):
+    """Generate comparative analyses for hypotheses grouped by cancer type.
+
+    Compares each hypothesis against others targeting the same cancer,
+    identifying unique advantages and synergies.
+    """
+    logger.info(
+        "Starting comparative analysis generation (cancer_type_id=%s, min_score=%.1f)",
+        cancer_type_id,
+        min_score,
+    )
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.llm_analyst import LLMAnalyst
+
+            analyst = LLMAnalyst()
+            async with async_session_factory() as session:
+                results = await analyst.generate_comparative_analyses(
+                    session,
+                    cancer_type_id=cancer_type_id,
+                    min_score=min_score,
+                )
+                await session.commit()
+            return results
+
+        results = _run_async(_generate())
+        logger.info(
+            "Comparative analysis complete: %d cancer types, %d analyses, %d errors",
+            results["cancer_types_processed"],
+            results["total_analyses"],
+            len(results["errors"]),
+        )
+        return results
+
+    except Exception as exc:
+        logger.error("Comparative analysis generation failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True, max_retries=2, name="app.tasks.analyze.generate_single_analysis"
+)
+def generate_single_analysis(self, hypothesis_id, analysis_type):
+    """Generate a single analysis type for a specific hypothesis.
+
+    analysis_type must be one of: narrative, critique, comparative,
+    literature_synthesis, experiment_design, confidence.
+    """
+    logger.info(
+        "Generating %s analysis for hypothesis %d",
+        analysis_type,
+        hypothesis_id,
+    )
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.llm_analyst import LLMAnalyst
+
+            analyst = LLMAnalyst()
+            method_map = {
+                "narrative": analyst.generate_narrative,
+                "critique": analyst.generate_critique,
+                "comparative": analyst.generate_comparative_analysis,
+                "literature_synthesis": analyst.synthesize_literature,
+                "experiment_design": analyst.design_experiments,
+                "confidence": analyst.assess_confidence,
+            }
+
+            if analysis_type not in method_map:
+                raise ValueError(
+                    f"Invalid analysis_type '{analysis_type}'. "
+                    f"Must be one of: {', '.join(method_map)}"
+                )
+
+            async with async_session_factory() as session:
+                result = await method_map[analysis_type](hypothesis_id, session)
+                await session.commit()
+            return result
+
+        result = _run_async(_generate())
+        logger.info(
+            "%s analysis complete for hypothesis %d (model=%s, tokens=%d+%d)",
+            analysis_type,
+            hypothesis_id,
+            result.get("model", "unknown"),
+            result.get("tokens", {}).get("input", 0),
+            result.get("tokens", {}).get("output", 0),
+        )
+        return result
+
+    except Exception as exc:
+        logger.error(
+            "%s analysis failed for hypothesis %d: %s",
+            analysis_type,
+            hypothesis_id,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
