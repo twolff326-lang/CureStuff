@@ -98,18 +98,39 @@ export default function HypothesisDetailPage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3 ml-4">
+        <div className="flex items-center gap-4 ml-4">
           <div className="text-center">
-            <div className="text-3xl font-bold text-slate-900">{h.composite_score}</div>
-            <div className="text-xs text-slate-400">/ 100</div>
+            <div className="text-3xl font-bold text-slate-900">
+              {h.adjusted_score ?? h.composite_score}
+            </div>
+            <div className="text-xs text-slate-400">
+              {h.adjusted_score != null && h.adjusted_score !== h.composite_score
+                ? `adjusted (raw ${h.composite_score})`
+                : "/ 100"}
+            </div>
           </div>
-          <span
-            className={`px-3 py-1 rounded-full text-sm font-medium border ${
-              STRENGTH_COLORS[h.evidence_strength] ?? "bg-slate-100 text-slate-600 border-slate-200"
-            }`}
-          >
-            {h.evidence_strength}
-          </span>
+          {h.llm_confidence_score != null && (
+            <div className="text-center border-l border-slate-200 pl-4">
+              <div className="text-xl font-bold text-violet-700">
+                {h.llm_confidence_score}
+              </div>
+              <div className="text-xs text-slate-400">LLM confidence</div>
+            </div>
+          )}
+          <div className="flex flex-col items-center gap-1">
+            <span
+              className={`px-3 py-1 rounded-full text-sm font-medium border ${
+                STRENGTH_COLORS[h.evidence_strength] ?? "bg-slate-100 text-slate-600 border-slate-200"
+              }`}
+            >
+              {h.evidence_strength}
+            </span>
+            {h.llm_recommendation && (
+              <span className="text-xs text-slate-500">
+                {h.llm_recommendation.replace(/_/g, " ")}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

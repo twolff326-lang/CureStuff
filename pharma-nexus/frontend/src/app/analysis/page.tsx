@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
-import type { CancerType, TaskProgress, TaskStatus } from "@/types";
+import type { CancerType, CostInfo, TaskProgress, TaskStatus } from "@/types";
 
 const STORAGE_KEY = "pharma-nexus-jobs";
 
@@ -56,16 +56,24 @@ export default function AnalysisPage() {
   const [cancerTypes, setCancerTypes] = useState<CancerType[]>([]);
   const [selectedCancer, setSelectedCancer] = useState<string>("");
   const [minScore, setMinScore] = useState(15);
+  const [costMode, setCostMode] = useState<string>("economy");
+  const [costInfo, setCostInfo] = useState<CostInfo | null>(null);
   const [jobs, setJobs] = useState<Job[]>(loadJobs);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [, setTick] = useState(0); // Force re-render for elapsed time
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load cancer types
+  // Load cancer types and cost info
   useEffect(() => {
     fetchApi<{ cancer_types: CancerType[] }>("/api/cancer-types?per_page=200")
       .then((d) => setCancerTypes(d.cancer_types))
+      .catch(() => {});
+    fetchApi<CostInfo>("/api/hypotheses/analyze/cost-info")
+      .then((d) => {
+        setCostInfo(d);
+        setCostMode(d.current_cost_mode);
+      })
       .catch(() => {});
   }, []);
 
@@ -169,6 +177,13 @@ export default function AnalysisPage() {
           endpoint = "/api/hypotheses/rescore";
           label = "Rescore all hypotheses";
           break;
+        case "confidence":
+          endpoint = "/api/hypotheses/analyze/confidence";
+          body.min_score = minScore;
+          body.limit = 200;
+          body.cost_mode = costMode;
+          label = `LLM Confidence Assessment (${costMode})`;
+          break;
         default:
           return;
       }
@@ -218,7 +233,7 @@ export default function AnalysisPage() {
         <h2 className="text-sm font-medium text-slate-500 mb-4">
           Configuration
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
               Cancer Type (optional)
@@ -249,11 +264,30 @@ export default function AnalysisPage() {
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              LLM Cost Mode
+            </label>
+            <select
+              value={costMode}
+              onChange={(e) => setCostMode(e.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="economy">Economy (Haiku) ~$0.01/hyp</option>
+              <option value="standard">Standard (Sonnet/Opus) ~$0.04/hyp</option>
+              <option value="premium">Premium (Opus) ~$0.19/hyp</option>
+            </select>
+            {costInfo && (
+              <p className="text-xs text-slate-400 mt-1">
+                100 hypotheses: ~${costInfo.available_modes[costMode]?.confidence_only_100?.toFixed(2) ?? "?"}
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <ActionCard
           title="Generate Hypotheses"
           description={
@@ -279,6 +313,14 @@ export default function AnalysisPage() {
           buttonLabel="Rescore"
           onClick={() => submitJob("rescore")}
           loading={submitting === "rescore"}
+        />
+        <ActionCard
+          title="LLM Confidence"
+          description={`Run confidence assessment (${costMode} mode) to activate the feedback loop`}
+          buttonLabel="Assess Confidence"
+          onClick={() => submitJob("confidence")}
+          loading={submitting === "confidence"}
+          accent
         />
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 flex flex-col">
           <h3 className="text-sm font-medium text-slate-800 mb-1">
@@ -328,6 +370,7 @@ function ActionCard({
   onClick,
   loading,
   disabled,
+  accent,
 }: {
   title: string;
   description: string;
@@ -335,15 +378,22 @@ function ActionCard({
   onClick: () => void;
   loading: boolean;
   disabled?: boolean;
+  accent?: boolean;
 }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 flex flex-col">
+    <div className={`rounded-lg shadow-sm border p-5 flex flex-col ${
+      accent ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-200"
+    }`}>
       <h3 className="text-sm font-medium text-slate-800 mb-1">{title}</h3>
       <p className="text-xs text-slate-400 mb-4 flex-1">{description}</p>
       <button
         onClick={onClick}
         disabled={loading || disabled}
-        className="w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className={`w-full px-3 py-2 text-white text-sm rounded-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+          accent
+            ? "bg-emerald-600 hover:bg-emerald-700"
+            : "bg-blue-600 hover:bg-blue-700"
+        }`}
       >
         {loading && (
           <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
@@ -437,6 +487,11 @@ function JobCard({ job }: { job: Job }) {
             {job.result.records_processed !== undefined && (
               <span className="text-sm font-medium text-emerald-700">
                 {String(job.result.records_processed)} processed
+              </span>
+            )}
+            {job.result.completed !== undefined && job.result.total !== undefined && (
+              <span className="text-sm font-medium text-emerald-700">
+                {String(job.result.completed)}/{String(job.result.total)} assessed
               </span>
             )}
           </div>

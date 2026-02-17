@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import type { CancerType, Hypothesis } from "@/types";
 
-type SortField = "composite_score" | "novelty_score" | "created_at";
+type SortField = "adjusted_score" | "composite_score" | "novelty_score" | "created_at";
 
 const STRENGTH_COLORS: Record<string, string> = {
   strong: "bg-emerald-100 text-emerald-800",
@@ -21,7 +21,7 @@ export default function HypothesesPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [sortBy, setSortBy] = useState<SortField>("composite_score");
+  const [sortBy, setSortBy] = useState<SortField>("adjusted_score");
   const [strengthFilter, setStrengthFilter] = useState<string>("");
   const [cancerFilter, setCancerFilter] = useState<string>("");
   const [minScore, setMinScore] = useState(0);
@@ -95,6 +95,7 @@ export default function HypothesesPage() {
               }}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
+              <option value="adjusted_score">Adjusted Score</option>
               <option value="composite_score">Composite Score</option>
               <option value="novelty_score">Novelty Score</option>
               <option value="created_at">Date Created</option>
@@ -207,6 +208,9 @@ export default function HypothesesPage() {
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-24">
                   Score
                 </th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-20">
+                  LLM
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-28">
                   Strength
                 </th>
@@ -216,7 +220,9 @@ export default function HypothesesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {hypotheses.map((h) => (
+              {hypotheses.map((h) => {
+                const displayScore = h.adjusted_score ?? h.composite_score;
+                return (
                 <tr key={h.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
                     <Link
@@ -232,7 +238,21 @@ export default function HypothesesPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <ScoreBadge score={h.composite_score} />
+                    <ScoreBadge score={displayScore} />
+                    {h.adjusted_score != null && h.adjusted_score !== h.composite_score && (
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        raw {h.composite_score}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {h.llm_confidence_score != null ? (
+                      <span className="text-xs font-medium text-violet-700">
+                        {h.llm_confidence_score}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-300">&mdash;</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span
@@ -248,7 +268,8 @@ export default function HypothesesPage() {
                     {new Date(h.created_at).toLocaleDateString()}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
 

@@ -16,6 +16,9 @@ export interface Hypothesis {
   title: string;
   summary: string | null;
   composite_score: number;
+  adjusted_score: number | null;
+  llm_confidence_score: number | null;
+  llm_recommendation: string | null;
   evidence_strength: string;
   status: string;
   created_at: string;
@@ -31,6 +34,7 @@ export interface Hypothesis {
   drug?: { id: number; name: string; drugbank_id: string };
   cancer_type?: { id: number; name: string; tcga_code: string };
   mechanism_narrative?: string | null;
+  reviewer_notes?: string | null;
   evidence?: HypothesisEvidence[];
   evidence_count?: number;
 }
@@ -93,6 +97,17 @@ export interface TaskStatus {
   status: "PENDING" | "STARTED" | "PROGRESS" | "SUCCESS" | "FAILURE" | "RETRY";
   result: Record<string, unknown> | null;
   progress: TaskProgress | null;
+}
+
+export interface CostInfo {
+  current_cost_mode: string;
+  models: { default: string; top: string };
+  per_hypothesis_estimates: {
+    confidence_only: { calls: number; model: string; estimated_cost_usd: number };
+    full_analysis: { calls: number; model_mix: string; estimated_cost_usd: number };
+  };
+  batch_100_estimates: { confidence_only: number; full_analysis: number };
+  available_modes: Record<string, { models: { default: string; top: string }; confidence_only_100: number }>;
 }
 
 export interface PaginatedResponse<T> {
