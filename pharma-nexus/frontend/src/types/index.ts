@@ -80,6 +80,7 @@ export interface IngestionLog {
   task_type: string;
   status: string;
   records_processed: number;
+  errors: string | null;
   started_at: string;
   completed_at: string | null;
 }
