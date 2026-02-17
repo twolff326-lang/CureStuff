@@ -1,0 +1,229 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { fetchApi } from "@/lib/api";
+import type { Hypothesis, HypothesisEvidence } from "@/types";
+
+const DIMENSION_LABELS: Record<string, string> = {
+  pathway_overlap: "Pathway Overlap",
+  expression_correlation: "Expression Correlation",
+  literature_support: "Literature Support",
+  clinical_evidence: "Clinical Evidence",
+  safety: "Safety Profile",
+  novelty: "Novelty",
+};
+
+const STRENGTH_COLORS: Record<string, string> = {
+  strong: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  moderate: "bg-blue-100 text-blue-800 border-blue-200",
+  suggestive: "bg-amber-100 text-amber-800 border-amber-200",
+  speculative: "bg-slate-100 text-slate-600 border-slate-200",
+};
+
+export default function HypothesisDetailPage() {
+  const params = useParams();
+  const id = params.id as string;
+  const [hypothesis, setHypothesis] = useState<Hypothesis | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const data = await fetchApi<Hypothesis>(`/api/hypotheses/${id}`);
+        setHypothesis(data);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load hypothesis"
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="text-center py-20">
+        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
+        <p className="mt-2 text-sm text-slate-500">Loading hypothesis...</p>
+      </div>
+    );
+  }
+
+  if (error || !hypothesis) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+        <p className="text-red-700">{error ?? "Hypothesis not found"}</p>
+        <Link href="/hypotheses" className="text-sm text-red-600 underline mt-2 inline-block">
+          Back to hypotheses
+        </Link>
+      </div>
+    );
+  }
+
+  const h = hypothesis;
+  const dims = h.dimension_scores;
+
+  return (
+    <div>
+      {/* Breadcrumb */}
+      <nav className="text-sm text-slate-400 mb-4">
+        <Link href="/hypotheses" className="hover:text-slate-600">
+          Hypotheses
+        </Link>
+        <span className="mx-2">/</span>
+        <span className="text-slate-600">#{h.id}</span>
+      </nav>
+
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6">
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold text-slate-900">{h.title}</h1>
+          <div className="flex items-center gap-3 mt-2">
+            {h.drug && (
+              <span className="text-sm text-slate-500">
+                Drug: <span className="font-medium text-slate-700">{h.drug.name}</span>
+              </span>
+            )}
+            {h.cancer_type && (
+              <span className="text-sm text-slate-500">
+                Cancer: <span className="font-medium text-slate-700">{h.cancer_type.name}</span>
+                <span className="text-slate-400 ml-1">({h.cancer_type.tcga_code})</span>
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-3 ml-4">
+          <div className="text-center">
+            <div className="text-3xl font-bold text-slate-900">{h.composite_score}</div>
+            <div className="text-xs text-slate-400">/ 100</div>
+          </div>
+          <span
+            className={`px-3 py-1 rounded-full text-sm font-medium border ${
+              STRENGTH_COLORS[h.evidence_strength] ?? "bg-slate-100 text-slate-600 border-slate-200"
+            }`}
+          >
+            {h.evidence_strength}
+          </span>
+        </div>
+      </div>
+
+      {/* Summary */}
+      {h.summary && (
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 mb-6">
+          <h2 className="text-sm font-medium text-slate-500 mb-2">Summary</h2>
+          <p className="text-sm text-slate-700 leading-relaxed">{h.summary}</p>
+        </div>
+      )}
+
+      {/* Dimension Scores */}
+      {dims && (
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 mb-6">
+          <h2 className="text-sm font-medium text-slate-500 mb-4">
+            Evidence Dimensions
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Object.entries(DIMENSION_LABELS).map(([key, label]) => {
+              const score = dims[key as keyof typeof dims] ?? 0;
+              return (
+                <div key={key} className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-slate-600">
+                        {label}
+                      </span>
+                      <span className="text-xs font-bold text-slate-800">
+                        {score}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          score >= 70
+                            ? "bg-emerald-500"
+                            : score >= 40
+                            ? "bg-blue-500"
+                            : score >= 20
+                            ? "bg-amber-500"
+                            : "bg-slate-300"
+                        }`}
+                        style={{ width: `${score}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Mechanism Narrative */}
+      {h.mechanism_narrative && (
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 mb-6">
+          <h2 className="text-sm font-medium text-slate-500 mb-2">
+            Mechanistic Narrative
+          </h2>
+          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+            {h.mechanism_narrative}
+          </div>
+        </div>
+      )}
+
+      {/* Evidence Records */}
+      {h.evidence && h.evidence.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+          <h2 className="text-sm font-medium text-slate-500 mb-4">
+            Evidence ({h.evidence_count ?? h.evidence.length} records)
+          </h2>
+          <div className="space-y-3">
+            {h.evidence.map((ev: HypothesisEvidence) => (
+              <EvidenceCard key={ev.id} evidence={ev} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceCard({ evidence }: { evidence: HypothesisEvidence }) {
+  const strengthColor: Record<string, string> = {
+    strong: "text-emerald-700 bg-emerald-50",
+    moderate: "text-blue-700 bg-blue-50",
+    weak: "text-slate-500 bg-slate-50",
+  };
+
+  return (
+    <div className="border border-slate-100 rounded-md p-3">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-xs font-medium text-slate-500 uppercase">
+          {evidence.evidence_type.replace(/_/g, " ")}
+        </span>
+        <span
+          className={`text-xs px-1.5 py-0.5 rounded ${
+            strengthColor[evidence.strength] ?? "text-slate-500 bg-slate-50"
+          }`}
+        >
+          {evidence.strength}
+        </span>
+        <span className="text-xs text-slate-400 ml-auto">
+          confidence: {(evidence.confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+      {evidence.description && (
+        <p className="text-sm text-slate-600">{evidence.description}</p>
+      )}
+      {evidence.source_id && (
+        <p className="text-xs text-slate-400 mt-1">
+          Source: {evidence.source_type} / {evidence.source_id}
+        </p>
+      )}
+    </div>
+  );
+}
