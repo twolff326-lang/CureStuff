@@ -1,26 +1,134 @@
-"""Initial data seeding script for Pharma Nexus.
+"""Initial data seeding and ingestion CLI for Pharma Nexus.
 
-Loads foundational reference data (cancer types from TCGA, etc.)
-into the database. Run after initial migration.
+Kicks off data ingestion from biomedical sources. Can run via Celery
+tasks or directly (synchronous mode).
 
 Usage:
-    python scripts/seed_data.py
+    python scripts/seed_data.py --source all_drugs
+    python scripts/seed_data.py --source drugbank --xml-path /data/drugbank.xml
+    python scripts/seed_data.py --source pubchem
+    python scripts/seed_data.py --source chembl
+    python scripts/seed_data.py --source drugbank --sync
 """
 
+import argparse
+import asyncio
+import logging
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("seed_data")
+
+VALID_SOURCES = {"drugbank", "pubchem", "chembl", "all_drugs"}
+
+
+async def run_sync(source: str, xml_path: str | None = None):
+    """Run connector directly without Celery (for development/testing)."""
+    from app.database import async_session_factory
+
+    connector_map = {
+        "drugbank": ("app.services.ingestion.drugbank", "DrugBankConnector"),
+        "pubchem": ("app.services.ingestion.pubchem", "PubChemConnector"),
+        "chembl": ("app.services.ingestion.chembl", "ChEMBLConnector"),
+    }
+
+    if source == "all_drugs":
+        # Run sequentially: drugbank first, then pubchem + chembl
+        for s in ["drugbank", "pubchem", "chembl"]:
+            await run_sync(s, xml_path=xml_path if s == "drugbank" else None)
+        return
+
+    if source not in connector_map:
+        logger.error("Unknown source: %s", source)
+        return
+
+    module_path, class_name = connector_map[source]
+    import importlib
+    module = importlib.import_module(module_path)
+    connector_class = getattr(module, class_name)
+
+    async with async_session_factory() as session:
+        kwargs = {"db_session": session}
+        if source == "drugbank" and xml_path:
+            kwargs["xml_path"] = xml_path
+
+        connector = connector_class(**kwargs)
+        logger.info("Running %s connector (sync mode)...", source)
+        result = await connector.run()
+        logger.info(
+            "Done: %d records processed, %d errors",
+            result["records_processed"],
+            result["errors_count"],
+        )
+        if result["errors"]:
+            for err in result["errors"][:10]:
+                logger.warning("  Error: %s", err)
+
+
+def run_via_celery(source: str, xml_path: str | None = None):
+    """Dispatch ingestion via Celery task queue."""
+    from app.tasks.celery_app import celery_app
+
+    task_map = {
+        "drugbank": "app.tasks.ingest.ingest_drugbank",
+        "pubchem": "app.tasks.ingest.ingest_pubchem",
+        "chembl": "app.tasks.ingest.ingest_chembl",
+        "all_drugs": "app.tasks.ingest.ingest_all_drugs",
+    }
+
+    task_name = task_map[source]
+    kwargs = {}
+    if source in ("drugbank", "all_drugs") and xml_path:
+        kwargs["xml_path"] = xml_path
+
+    result = celery_app.send_task(task_name, kwargs=kwargs)
+    logger.info("Task dispatched: %s (task_id=%s)", task_name, result.id)
+    logger.info("Monitor via: GET /api/ingestion/status/%s", result.id)
+
 
 def main():
-    print("Pharma Nexus - Data Seeding")
+    parser = argparse.ArgumentParser(
+        description="Pharma Nexus - Data Ingestion CLI"
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        required=True,
+        choices=sorted(VALID_SOURCES),
+        help="Data source to ingest",
+    )
+    parser.add_argument(
+        "--xml-path",
+        type=str,
+        default=None,
+        help="Path to DrugBank XML file (for drugbank/all_drugs sources)",
+    )
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Run directly without Celery (synchronous mode)",
+    )
+
+    args = parser.parse_args()
+
+    print("Pharma Nexus - Data Ingestion")
     print("=" * 40)
-    print("Seed data loading will be implemented in future prompts.")
-    print("This script will pre-load:")
-    print("  - 33 TCGA cancer types")
-    print("  - KEGG/Reactome pathway reference data")
-    print("  - Common gene symbol mappings")
+    print(f"Source: {args.source}")
+    print(f"Mode: {'sync (direct)' if args.sync else 'async (Celery)'}")
+    if args.xml_path:
+        print(f"XML path: {args.xml_path}")
+    print()
+
+    if args.sync:
+        asyncio.run(run_sync(args.source, xml_path=args.xml_path))
+    else:
+        run_via_celery(args.source, xml_path=args.xml_path)
 
 
 if __name__ == "__main__":
