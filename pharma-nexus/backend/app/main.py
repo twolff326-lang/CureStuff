@@ -8,6 +8,7 @@ from app.config import settings
 from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
     cancer, pathways, literature, clinical_trials, llm_analysis, reports,
+    validation,
 )
 
 
@@ -54,6 +55,9 @@ app.include_router(
     llm_analysis.router, prefix="/api/llm-analysis", tags=["llm-analysis"]
 )
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
+app.include_router(
+    validation.router, prefix="/api/validation", tags=["validation"]
+)
 
 
 @app.get("/health")
