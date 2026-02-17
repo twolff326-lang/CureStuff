@@ -51,4 +51,5 @@ class GeneExpression(Base):
 
     __table_args__ = (
         Index("ix_gene_expression_cancer_gene", "cancer_type_id", "gene_symbol"),
+        Index("ix_gene_expression_cancer_tumor", "cancer_type_id", "is_tumor"),
     )

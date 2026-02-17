@@ -1,3 +1,5 @@
+import logging
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -60,3 +62,23 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+_PLACEHOLDER = "change_me_in_production"
+
+if settings.app_env != "development":
+    _logger = logging.getLogger(__name__)
+    _insecure = []
+    if _PLACEHOLDER in settings.database_url:
+        _insecure.append("DATABASE_URL")
+    if _PLACEHOLDER in settings.database_url_sync:
+        _insecure.append("DATABASE_URL_SYNC")
+    if settings.neo4j_password == _PLACEHOLDER:
+        _insecure.append("NEO4J_PASSWORD")
+    if settings.app_secret_key == _PLACEHOLDER:
+        _insecure.append("APP_SECRET_KEY")
+    if _insecure:
+        _logger.critical(
+            "INSECURE DEFAULT CREDENTIALS detected for: %s. "
+            "Set these via environment variables before deploying.",
+            ", ".join(_insecure),
+        )

@@ -106,7 +106,7 @@ class HypothesisEngine:
                     )
 
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "Failed scoring drug=%d cancer=%d: %s",
                     drug_id, cancer_type_id, e,
                 )
@@ -154,7 +154,7 @@ class HypothesisEngine:
                     results.append(hypothesis)
 
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "Failed scoring drug=%d cancer=%d: %s",
                     drug_id, cid, e,
                 )
@@ -208,7 +208,7 @@ class HypothesisEngine:
                     await db.flush()
 
             except Exception as e:
-                logger.debug("Failed rescoring hypothesis %d: %s", hyp.id, e)
+                logger.warning("Failed rescoring hypothesis %d: %s", hyp.id, e)
 
         await db.commit()
         logger.info("Rescored %d/%d hypotheses", rescored, total)

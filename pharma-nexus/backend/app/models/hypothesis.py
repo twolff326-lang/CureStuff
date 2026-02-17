@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -71,7 +72,7 @@ class HypothesisEvidence(Base):
     )
     evidence_type = Column(String(50), nullable=False)
     source_type = Column(String(50))
-    source_id = Column(String(100))
+    source_id = Column(String(100), index=True)
     description = Column(Text)
     strength = Column(String(20), default="weak")
     confidence = Column(Float, default=0.0)
@@ -81,6 +82,10 @@ class HypothesisEvidence(Base):
     hypothesis = relationship("Hypothesis", back_populates="evidence")
 
     __table_args__ = (
+        UniqueConstraint(
+            "hypothesis_id", "evidence_type", "source_id",
+            name="uq_hypothesis_evidence_hyp_type_source",
+        ),
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="ck_hypothesis_evidence_confidence",
