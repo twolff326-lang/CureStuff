@@ -7,6 +7,7 @@ const navigation = [
   { name: "Dashboard", href: "/" },
   { name: "Hypotheses", href: "/hypotheses" },
   { name: "Discovery", href: "/discovery" },
+  { name: "Reports", href: "/reports" },
   { name: "Knowledge Graph", href: "/knowledge-graph" },
   { name: "Analysis", href: "/analysis" },
   { name: "Data Sources", href: "/data-sources" },
