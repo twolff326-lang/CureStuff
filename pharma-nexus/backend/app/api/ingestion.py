@@ -14,7 +14,7 @@ VALID_SOURCES = {
     "cbioportal", "tcga", "cosmic", "all_cancer_data",
     "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
     "literature", "clinical_trials", "embeddings", "literature_analysis",
-    "all_literature",
+    "all_literature", "knowledge_graph",
 }
 
 
@@ -61,6 +61,7 @@ async def start_ingestion(request: IngestionRequest):
         "embeddings": "app.tasks.ingest.generate_embeddings",
         "literature_analysis": "app.tasks.ingest.analyze_literature_batch",
         "all_literature": "app.tasks.ingest.ingest_all_literature",
+        "knowledge_graph": "app.tasks.ingest.sync_knowledge_graph",
     }
 
     task_name = task_map[source]

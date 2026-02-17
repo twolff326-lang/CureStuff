@@ -567,3 +567,44 @@ def _literature_pipeline_complete(results):
     """Callback after literature pipeline completes."""
     logger.info("Literature pipeline complete. Results: %s", results)
     return {"status": "completed", "source_results": results}
+
+
+# ------------------------------------------------------------------
+# Knowledge graph sync tasks
+# ------------------------------------------------------------------
+
+
+@celery_app.task(bind=True, max_retries=2, name="app.tasks.ingest.sync_knowledge_graph")
+def sync_knowledge_graph(self):
+    """Full PostgreSQL -> Neo4j synchronization.
+
+    Reads all relevant data from Postgres and creates/updates
+    nodes and edges in Neo4j. Idempotent — safe to run multiple times.
+    Runtime: ~5-15 minutes depending on data volume.
+    Should be run after any major data ingestion.
+    """
+    logger.info("Starting knowledge graph sync")
+    try:
+
+        async def _sync():
+            from app.database import async_session_factory
+            from app.services.knowledge_graph import KnowledgeGraphService
+
+            kg = KnowledgeGraphService()
+            try:
+                async with async_session_factory() as session:
+                    return await kg.full_sync(session)
+            finally:
+                await kg.close()
+
+        result = _run_async(_sync())
+        logger.info("Knowledge graph sync complete: %s", result)
+        return {
+            "records_processed": result.get("total_nodes", 0) + result.get("total_edges", 0),
+            "errors_count": 0,
+            **result,
+        }
+
+    except Exception as exc:
+        logger.error("Knowledge graph sync failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))

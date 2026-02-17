@@ -43,7 +43,7 @@ app.include_router(hypotheses.router, prefix="/api/hypotheses", tags=["hypothese
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(ingestion.router, prefix="/api/ingestion", tags=["ingestion"])
 app.include_router(
-    knowledge_graph.router, prefix="/api/knowledge-graph", tags=["knowledge-graph"]
+    knowledge_graph.router, prefix="/api/graph", tags=["knowledge-graph"]
 )
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 app.include_router(cancer.router, prefix="/api", tags=["cancer"])
