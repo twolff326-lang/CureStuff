@@ -7,28 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from app.database import Base
 
 # Import all models so they register with Base.metadata
-from app.models import (  # noqa: F401
-    Drug,
-    DrugTarget,
-    Target,
-    ProteinInteraction,
-    Pathway,
-    PathwayTarget,
-    CancerType,
-    CancerMolecularProfile,
-    Mutation,
-    Hypothesis,
-    HypothesisEvidence,
-    Bioassay,
-    GeneExpression,
-    Literature,
-    LiteratureDrug,
-    LiteratureTarget,
-    LiteratureCancer,
-    ClinicalTrial,
-    TrialDrug,
-    IngestionLog,
-)
+import app.models  # noqa: F401
 
 config = context.config
 
