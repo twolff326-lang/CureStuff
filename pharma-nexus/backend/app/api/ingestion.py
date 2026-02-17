@@ -12,6 +12,7 @@ router = APIRouter()
 VALID_SOURCES = {
     "drugbank", "pubchem", "chembl", "all_drugs",
     "cbioportal", "tcga", "cosmic", "all_cancer_data",
+    "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
 }
 
 
@@ -44,6 +45,12 @@ async def start_ingestion(request: IngestionRequest):
         "tcga": "app.tasks.ingest.ingest_tcga",
         "cosmic": "app.tasks.ingest.ingest_cosmic",
         "all_cancer_data": "app.tasks.ingest.ingest_all_cancer_data",
+        "kegg": "app.tasks.ingest.ingest_kegg",
+        "reactome": "app.tasks.ingest.ingest_reactome",
+        "string": "app.tasks.ingest.ingest_string",
+        "uniprot": "app.tasks.ingest.ingest_uniprot",
+        "opentargets": "app.tasks.ingest.ingest_opentargets",
+        "all_pathways": "app.tasks.ingest.ingest_all_pathways",
     }
 
     task_name = task_map[source]

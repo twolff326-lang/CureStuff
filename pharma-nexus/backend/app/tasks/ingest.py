@@ -237,3 +237,151 @@ def _cancer_ingestion_complete(results):
         "status": "completed",
         "source_results": results,
     }
+
+
+# ------------------------------------------------------------------
+# Pathway & protein interaction ingestion tasks
+# ------------------------------------------------------------------
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_kegg")
+def ingest_kegg(self):
+    """Ingest KEGG human pathway data (~340 pathways)."""
+    logger.info("Starting KEGG ingestion task")
+    try:
+        from app.services.ingestion.kegg import KEGGConnector
+
+        result = _run_async(_run_connector(KEGGConnector))
+        logger.info(
+            "KEGG ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("KEGG ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_reactome")
+def ingest_reactome(self):
+    """Ingest Reactome pathway data with hierarchy."""
+    logger.info("Starting Reactome ingestion task")
+    try:
+        from app.services.ingestion.reactome import ReactomeConnector
+
+        result = _run_async(_run_connector(ReactomeConnector))
+        logger.info(
+            "Reactome ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("Reactome ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_string")
+def ingest_string(self):
+    """Ingest STRING protein-protein interactions for all drug targets."""
+    logger.info("Starting STRING ingestion task")
+    try:
+        from app.services.ingestion.string_db import STRINGConnector
+
+        result = _run_async(_run_connector(STRINGConnector))
+        logger.info(
+            "STRING ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("STRING ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_uniprot")
+def ingest_uniprot(self):
+    """Enrich target records with UniProt protein data."""
+    logger.info("Starting UniProt ingestion task")
+    try:
+        from app.services.ingestion.uniprot import UniProtConnector
+
+        result = _run_async(_run_connector(UniProtConnector))
+        logger.info(
+            "UniProt ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("UniProt ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_opentargets")
+def ingest_opentargets(self):
+    """Fetch OpenTargets target-disease associations."""
+    logger.info("Starting OpenTargets ingestion task")
+    try:
+        from app.services.ingestion.opentargets import OpenTargetsConnector
+
+        result = _run_async(_run_connector(OpenTargetsConnector))
+        logger.info(
+            "OpenTargets ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("OpenTargets ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(name="app.tasks.ingest.ingest_all_pathways")
+def ingest_all_pathways():
+    """Run all pathway/interaction ingestion.
+
+    Order matters:
+    1. UniProt first (enriches targets with Ensembl IDs needed by OpenTargets)
+    2. KEGG + Reactome in parallel (pathways)
+    3. STRING (needs complete target list)
+    4. OpenTargets (needs Ensembl IDs from UniProt)
+    """
+    logger.info("Starting full pathway/interaction ingestion pipeline")
+
+    # Step 1: UniProt enrichment first
+    uniprot_result = ingest_uniprot.apply()
+    uniprot_result.get(timeout=3600)
+
+    # Step 2: KEGG + Reactome in parallel
+    pathway_tasks = chord(
+        [ingest_kegg.s(), ingest_reactome.s()],
+        _pathway_phase_complete.s(),
+    )
+    pathway_result = pathway_tasks.apply_async()
+    pathway_result.get(timeout=7200)
+
+    # Step 3: STRING interactions
+    string_result = ingest_string.apply()
+    string_result.get(timeout=3600)
+
+    # Step 4: OpenTargets (needs Ensembl IDs from step 1)
+    ot_result = ingest_opentargets.apply()
+    ot_result.get(timeout=3600)
+
+    return {
+        "status": "completed",
+        "uniprot_task_id": uniprot_result.id,
+        "pathway_task_id": pathway_result.id,
+        "string_task_id": string_result.id,
+        "opentargets_task_id": ot_result.id,
+    }
+
+
+@celery_app.task(name="app.tasks.ingest.pathway_phase_complete")
+def _pathway_phase_complete(results):
+    """Callback after KEGG and Reactome ingestion complete."""
+    logger.info("Pathway ingestion phase complete. Results: %s", results)
+    return {"status": "completed", "source_results": results}

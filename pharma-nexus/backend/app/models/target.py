@@ -27,6 +27,7 @@ class Target(Base):
     function_description = Column(Text)
     subcellular_location = Column(Text)
     protein_class = Column(String(200))
+    ensembl_gene_id = Column(String(30), index=True)
     embedding = Column(Vector(384))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 

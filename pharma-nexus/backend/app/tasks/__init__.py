@@ -8,6 +8,12 @@ from app.tasks.ingest import (
     ingest_tcga,
     ingest_cosmic,
     ingest_all_cancer_data,
+    ingest_kegg,
+    ingest_reactome,
+    ingest_string,
+    ingest_uniprot,
+    ingest_opentargets,
+    ingest_all_pathways,
 )
 
 __all__ = [
@@ -20,4 +26,10 @@ __all__ = [
     "ingest_tcga",
     "ingest_cosmic",
     "ingest_all_cancer_data",
+    "ingest_kegg",
+    "ingest_reactome",
+    "ingest_string",
+    "ingest_uniprot",
+    "ingest_opentargets",
+    "ingest_all_pathways",
 ]

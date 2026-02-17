@@ -12,6 +12,12 @@ Usage:
     python scripts/seed_data.py --source tcga
     python scripts/seed_data.py --source cosmic --census-tsv-path /data/cancer_gene_census.tsv
     python scripts/seed_data.py --source all_cancer_data
+    python scripts/seed_data.py --source kegg
+    python scripts/seed_data.py --source reactome
+    python scripts/seed_data.py --source string
+    python scripts/seed_data.py --source uniprot
+    python scripts/seed_data.py --source opentargets
+    python scripts/seed_data.py --source all_pathways
     python scripts/seed_data.py --source drugbank --sync
 """
 
@@ -32,6 +38,7 @@ logger = logging.getLogger("seed_data")
 VALID_SOURCES = {
     "drugbank", "pubchem", "chembl", "all_drugs",
     "cbioportal", "tcga", "cosmic", "all_cancer_data",
+    "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
 }
 
 
@@ -50,6 +57,11 @@ async def run_sync(
         "cbioportal": ("app.services.ingestion.cbioportal", "CBioPortalConnector"),
         "tcga": ("app.services.ingestion.tcga", "TCGAConnector"),
         "cosmic": ("app.services.ingestion.cosmic", "COSMICConnector"),
+        "kegg": ("app.services.ingestion.kegg", "KEGGConnector"),
+        "reactome": ("app.services.ingestion.reactome", "ReactomeConnector"),
+        "string": ("app.services.ingestion.string_db", "STRINGConnector"),
+        "uniprot": ("app.services.ingestion.uniprot", "UniProtConnector"),
+        "opentargets": ("app.services.ingestion.opentargets", "OpenTargetsConnector"),
     }
 
     if source == "all_drugs":
@@ -62,6 +74,15 @@ async def run_sync(
         await run_sync("cbioportal")
         await run_sync("tcga")
         await run_sync("cosmic", census_tsv_path=census_tsv_path)
+        return
+
+    if source == "all_pathways":
+        # UniProt first (populates Ensembl IDs), then KEGG+Reactome, then STRING, then OpenTargets
+        await run_sync("uniprot")
+        await run_sync("kegg")
+        await run_sync("reactome")
+        await run_sync("string")
+        await run_sync("opentargets")
         return
 
     if source not in connector_map:
@@ -110,6 +131,12 @@ def run_via_celery(
         "tcga": "app.tasks.ingest.ingest_tcga",
         "cosmic": "app.tasks.ingest.ingest_cosmic",
         "all_cancer_data": "app.tasks.ingest.ingest_all_cancer_data",
+        "kegg": "app.tasks.ingest.ingest_kegg",
+        "reactome": "app.tasks.ingest.ingest_reactome",
+        "string": "app.tasks.ingest.ingest_string",
+        "uniprot": "app.tasks.ingest.ingest_uniprot",
+        "opentargets": "app.tasks.ingest.ingest_opentargets",
+        "all_pathways": "app.tasks.ingest.ingest_all_pathways",
     }
 
     task_name = task_map[source]
