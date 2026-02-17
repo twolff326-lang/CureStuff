@@ -198,6 +198,102 @@ class ExpressionPreprocessor:
         variances = await self.compute_gene_variance(cancer_type_id, db_session)
         return [v["gene_symbol"] for v in variances[:top_n]]
 
+    async def get_gene_sample_counts(
+        self,
+        cancer_type_id: int,
+        db_session: AsyncSession,
+        min_tumor_samples: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Pass 1: Get per-gene sample counts and basic stats from the database.
+
+        Returns lightweight summary rows (~2 MB for 20k genes) instead of
+        loading all sample-level expression values (~100-500 MB).
+
+        Used to filter genes before the heavier Pass 2 fetch.
+        """
+        result = await db_session.execute(
+            text("""
+                SELECT gene_symbol,
+                       is_tumor,
+                       count(*) AS n_samples,
+                       avg(expression_log2) AS mean_expr,
+                       variance(expression_log2) AS var_expr
+                FROM gene_expression
+                WHERE cancer_type_id = :cancer_type_id
+                  AND expression_log2 IS NOT NULL
+                GROUP BY gene_symbol, is_tumor
+            """),
+            {"cancer_type_id": cancer_type_id},
+        )
+
+        gene_stats: dict[str, dict[str, Any]] = {}
+        for row in result.fetchall():
+            gene = row[0]
+            if gene not in gene_stats:
+                gene_stats[gene] = {
+                    "gene_symbol": gene,
+                    "n_tumor": 0,
+                    "n_normal": 0,
+                    "tumor_mean": None,
+                    "normal_mean": None,
+                    "tumor_var": None,
+                    "normal_var": None,
+                }
+            if row[1]:  # is_tumor
+                gene_stats[gene]["n_tumor"] = row[2]
+                gene_stats[gene]["tumor_mean"] = float(row[3]) if row[3] is not None else None
+                gene_stats[gene]["tumor_var"] = float(row[4]) if row[4] is not None else None
+            else:
+                gene_stats[gene]["n_normal"] = row[2]
+                gene_stats[gene]["normal_mean"] = float(row[3]) if row[3] is not None else None
+                gene_stats[gene]["normal_var"] = float(row[4]) if row[4] is not None else None
+
+        # Filter: only genes with enough tumor samples
+        return [
+            stats for stats in gene_stats.values()
+            if stats["n_tumor"] >= min_tumor_samples
+        ]
+
+    async def get_grouped_expression_for_genes(
+        self,
+        cancer_type_id: int,
+        gene_symbols: list[str],
+        db_session: AsyncSession,
+    ) -> dict[str, dict[str, list[float]]]:
+        """Pass 2: Get expression values for a specific set of genes.
+
+        Fetches in chunks of 500 genes to control memory usage.
+        Used after Pass 1 filtering to only load data for genes that
+        will actually be tested.
+        """
+        CHUNK_SIZE = 500
+        gene_data: dict[str, dict[str, list[float]]] = {}
+
+        for i in range(0, len(gene_symbols), CHUNK_SIZE):
+            chunk = gene_symbols[i : i + CHUNK_SIZE]
+            result = await db_session.execute(
+                text("""
+                    SELECT gene_symbol,
+                           is_tumor,
+                           array_agg(expression_log2) AS values
+                    FROM gene_expression
+                    WHERE cancer_type_id = :cancer_type_id
+                      AND expression_log2 IS NOT NULL
+                      AND gene_symbol = ANY(:genes)
+                    GROUP BY gene_symbol, is_tumor
+                """),
+                {"cancer_type_id": cancer_type_id, "genes": chunk},
+            )
+
+            for row in result.fetchall():
+                gene = row[0]
+                if gene not in gene_data:
+                    gene_data[gene] = {"tumor": [], "normal": []}
+                key = "tumor" if row[1] else "normal"
+                gene_data[gene][key] = [v for v in row[2] if v is not None]
+
+        return gene_data
+
     async def get_grouped_expression(
         self,
         cancer_type_id: int,
@@ -207,27 +303,25 @@ class ExpressionPreprocessor:
 
         Returns: {gene_symbol: {'tumor': [values], 'normal': [values]}}
 
-        Uses array_agg for efficient batch retrieval.
+        Uses a two-pass approach to reduce peak memory:
+        1. Fetch lightweight per-gene stats to identify testable genes
+        2. Only load full sample arrays for genes with enough data
+
+        This typically reduces the number of genes fetched by 20-50%
+        compared to loading everything upfront.
         """
-        result = await db_session.execute(
-            text("""
-                SELECT gene_symbol,
-                       is_tumor,
-                       array_agg(expression_log2) AS values
-                FROM gene_expression
-                WHERE cancer_type_id = :cancer_type_id
-                  AND expression_log2 IS NOT NULL
-                GROUP BY gene_symbol, is_tumor
-            """),
-            {"cancer_type_id": cancer_type_id},
+        # Pass 1: Get gene-level stats (~2 MB)
+        gene_stats = await self.get_gene_sample_counts(
+            cancer_type_id, db_session, min_tumor_samples=3
         )
 
-        gene_data: dict[str, dict[str, list[float]]] = {}
-        for row in result.fetchall():
-            gene = row[0]
-            if gene not in gene_data:
-                gene_data[gene] = {"tumor": [], "normal": []}
-            key = "tumor" if row[1] else "normal"
-            gene_data[gene][key] = [v for v in row[2] if v is not None]
+        if not gene_stats:
+            return {}
 
-        return gene_data
+        # Only fetch genes with enough samples for statistical testing
+        testable_genes = [g["gene_symbol"] for g in gene_stats]
+
+        # Pass 2: Fetch expression arrays in chunks (~50-200 MB vs 100-500 MB)
+        return await self.get_grouped_expression_for_genes(
+            cancer_type_id, testable_genes, db_session
+        )

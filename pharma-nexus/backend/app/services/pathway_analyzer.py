@@ -203,63 +203,118 @@ class PathwayAnalyzer:
                 "overlap_score": 0,
             }
 
-        # Step 3: Find pathways for drug targets
+        # Step 3: Find pathways for drug targets (batch query instead of per-gene)
         drug_pathway_map: dict[int, dict] = {}  # pathway_id -> info
-        for gene in drug_target_genes:
-            gene_pathways = await self.get_gene_pathways(gene)
-            for pw in gene_pathways:
-                pid = pw["pathway_id"]
+        drug_genes_upper = [g.upper() for g in drug_target_genes]
+
+        # Batch: pathways via pathway_targets table
+        if drug_genes_upper:
+            pt_result = await self._session.execute(
+                select(Pathway.id, Pathway.name, Pathway.source, Target.gene_symbol)
+                .join(PathwayTarget, PathwayTarget.pathway_id == Pathway.id)
+                .join(Target, PathwayTarget.target_id == Target.id)
+                .where(Target.gene_symbol.in_(drug_genes_upper))
+            )
+            for row in pt_result.all():
+                pid, pname, psource, gene = row
                 if pid not in drug_pathway_map:
                     drug_pathway_map[pid] = {
                         "pathway_id": pid,
-                        "pathway_name": pw["name"],
-                        "source": pw["source"],
+                        "pathway_name": pname,
+                        "source": psource,
                         "drug_targets_in_pathway": [],
                         "cancer_altered_genes_in_pathway": [],
                     }
                 if gene not in drug_pathway_map[pid]["drug_targets_in_pathway"]:
                     drug_pathway_map[pid]["drug_targets_in_pathway"].append(gene)
 
-        # Step 4: Find which cancer genes are in drug-target pathways
-        cancer_pathway_ids: set[int] = set()
-        for gene in cancer_genes:
-            gene_upper = gene.upper()
-            # Check JSONB genes column
-            pw_result = await self._session.execute(
-                select(Pathway.id).where(
-                    Pathway.genes.contains([gene_upper])
+            # Also check JSONB genes column for each drug target gene
+            for gene in drug_genes_upper:
+                json_result = await self._session.execute(
+                    select(Pathway.id, Pathway.name, Pathway.source).where(
+                        Pathway.genes.contains([gene])
+                    )
                 )
-            )
-            for row in pw_result.all():
-                cancer_pathway_ids.add(row[0])
-                if row[0] in drug_pathway_map:
-                    info = drug_pathway_map[row[0]]
-                    if gene not in info["cancer_altered_genes_in_pathway"]:
-                        info["cancer_altered_genes_in_pathway"].append(gene)
+                for row in json_result.all():
+                    pid, pname, psource = row
+                    if pid not in drug_pathway_map:
+                        drug_pathway_map[pid] = {
+                            "pathway_id": pid,
+                            "pathway_name": pname,
+                            "source": psource,
+                            "drug_targets_in_pathway": [],
+                            "cancer_altered_genes_in_pathway": [],
+                        }
+                    if gene not in drug_pathway_map[pid]["drug_targets_in_pathway"]:
+                        drug_pathway_map[pid]["drug_targets_in_pathway"].append(gene)
 
-            # Also check via pathway_targets
-            pt_result = await self._session.execute(
-                select(PathwayTarget.pathway_id)
-                .join(Target, PathwayTarget.target_id == Target.id)
-                .where(Target.gene_symbol == gene_upper)
-            )
-            for row in pt_result.all():
-                cancer_pathway_ids.add(row[0])
-                if row[0] in drug_pathway_map:
-                    info = drug_pathway_map[row[0]]
-                    if gene not in info["cancer_altered_genes_in_pathway"]:
-                        info["cancer_altered_genes_in_pathway"].append(gene)
+        # Step 4: Find which cancer genes are in drug-target pathways (batch query)
+        cancer_pathway_ids: set[int] = set()
+        cancer_genes_upper = [g.upper() for g in cancer_genes]
+
+        # Batch: cancer genes via pathway_targets (one query for all genes)
+        if cancer_genes_upper:
+            CHUNK_SIZE = 200
+            for i in range(0, len(cancer_genes_upper), CHUNK_SIZE):
+                chunk = cancer_genes_upper[i : i + CHUNK_SIZE]
+
+                # Batch via pathway_targets table
+                pt_result = await self._session.execute(
+                    select(PathwayTarget.pathway_id, Target.gene_symbol)
+                    .join(Target, PathwayTarget.target_id == Target.id)
+                    .where(Target.gene_symbol.in_(chunk))
+                )
+                for row in pt_result.all():
+                    pid, gene = row
+                    cancer_pathway_ids.add(pid)
+                    if pid in drug_pathway_map:
+                        info = drug_pathway_map[pid]
+                        if gene not in info["cancer_altered_genes_in_pathway"]:
+                            info["cancer_altered_genes_in_pathway"].append(gene)
+
+                # Batch via JSONB genes column
+                for gene in chunk:
+                    pw_result = await self._session.execute(
+                        select(Pathway.id).where(
+                            Pathway.genes.contains([gene])
+                        )
+                    )
+                    for row in pw_result.all():
+                        cancer_pathway_ids.add(row[0])
+                        if row[0] in drug_pathway_map:
+                            info = drug_pathway_map[row[0]]
+                            if gene not in info["cancer_altered_genes_in_pathway"]:
+                                info["cancer_altered_genes_in_pathway"].append(gene)
 
         # Step 5: Identify shared pathways and compute significance
+        # Batch-fetch pathway gene counts for all shared pathways at once
+        shared_pathway_ids = [
+            pid for pid, info in drug_pathway_map.items()
+            if info["cancer_altered_genes_in_pathway"]
+        ]
+
+        # Pre-fetch pathway sizes from the genes JSONB column in one query
+        pathway_sizes: dict[int, int] = {}
+        if shared_pathway_ids:
+            for i in range(0, len(shared_pathway_ids), 500):
+                chunk_ids = shared_pathway_ids[i : i + 500]
+                size_result = await self._session.execute(
+                    select(
+                        Pathway.id,
+                        func.jsonb_array_length(Pathway.genes),
+                    ).where(
+                        Pathway.id.in_(chunk_ids),
+                        Pathway.genes.isnot(None),
+                    )
+                )
+                for row in size_result.all():
+                    pathway_sizes[row[0]] = row[1] or 1
+
         shared_pathways = []
 
-        for pid, info in drug_pathway_map.items():
-            if not info["cancer_altered_genes_in_pathway"]:
-                continue
-
-            # Get pathway size
-            pathway_genes = await self.get_pathway_genes(pid)
-            pathway_size = max(len(pathway_genes), 1)
+        for pid in shared_pathway_ids:
+            info = drug_pathway_map[pid]
+            pathway_size = max(pathway_sizes.get(pid, 1), 1)
 
             # Compute significance based on overlap fraction and pathway size
             drug_in_pw = len(info["drug_targets_in_pathway"])
@@ -460,24 +515,44 @@ class PathwayAnalyzer:
         if not cancer_genes:
             return []
 
-        # Step 2: Find pathways containing these cancer genes
+        # Step 2: Find pathways containing cancer genes via pathway_targets (batch)
         cancer_pathway_ids: set[int] = set()
-        for gene in list(cancer_genes)[:200]:
-            pw_result = await self._session.execute(
-                select(Pathway.id).where(
-                    Pathway.genes.contains([gene.upper()])
+        cancer_genes_list = list(cancer_genes)[:200]
+        cancer_genes_upper = [g.upper() for g in cancer_genes_list]
+
+        # Batch query via pathway_targets table
+        if cancer_genes_upper:
+            CHUNK = 200
+            for i in range(0, len(cancer_genes_upper), CHUNK):
+                chunk = cancer_genes_upper[i : i + CHUNK]
+                pt_result = await self._session.execute(
+                    select(func.distinct(PathwayTarget.pathway_id))
+                    .join(Target, PathwayTarget.target_id == Target.id)
+                    .where(Target.gene_symbol.in_(chunk))
                 )
-            )
-            cancer_pathway_ids.update(row[0] for row in pw_result.all())
+                cancer_pathway_ids.update(row[0] for row in pt_result.all())
+
+                # Also check JSONB genes column
+                for gene in chunk:
+                    pw_result = await self._session.execute(
+                        select(Pathway.id).where(
+                            Pathway.genes.contains([gene])
+                        )
+                    )
+                    cancer_pathway_ids.update(row[0] for row in pw_result.all())
 
         if not cancer_pathway_ids:
             return []
 
-        # Step 3: Find drug targets in those pathways
+        # Step 3: Find drug targets in those pathways (batch query)
         druggable_nodes = []
         seen = set()
+        pathway_ids_list = list(cancer_pathway_ids)[:100]
 
-        for pid in list(cancer_pathway_ids)[:100]:
+        # Batch query: one query for all pathways instead of one per pathway
+        CHUNK = 50
+        for i in range(0, len(pathway_ids_list), CHUNK):
+            chunk_pids = pathway_ids_list[i : i + CHUNK]
             result = await self._session.execute(
                 select(
                     Drug.id,
@@ -492,7 +567,7 @@ class PathwayAnalyzer:
                 .join(PathwayTarget, PathwayTarget.target_id == Target.id)
                 .join(Pathway, PathwayTarget.pathway_id == Pathway.id)
                 .where(
-                    PathwayTarget.pathway_id == pid,
+                    PathwayTarget.pathway_id.in_(chunk_pids),
                     Drug.status.in_(["approved", "investigational"]),
                 )
             )

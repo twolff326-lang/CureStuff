@@ -284,9 +284,9 @@ class EvidenceScorer:
           - Score = min(co_mentions * 8 + analyzed_count * 3, 100)
           - Bonus for papers with "repurposing" in relevance_tags
         """
-        # Papers mentioning both drug and cancer type
-        co_mention_query = (
-            select(Literature)
+        # Count co-mention papers (lightweight — no full object load)
+        co_count_query = (
+            select(func.count(Literature.id))
             .join(LiteratureDrug, LiteratureDrug.literature_id == Literature.id)
             .join(LiteratureCancer, LiteratureCancer.literature_id == Literature.id)
             .where(
@@ -294,9 +294,22 @@ class EvidenceScorer:
                 LiteratureCancer.cancer_type_id == cancer_type_id,
             )
         )
-        co_result = await db.execute(co_mention_query)
-        co_papers = co_result.scalars().all()
-        co_count = len(co_papers)
+        co_count_result = await db.execute(co_count_query)
+        co_count = co_count_result.scalar() or 0
+
+        # Fetch only top papers for evidence and repurposing check (limit 20)
+        co_papers_query = (
+            select(Literature)
+            .join(LiteratureDrug, LiteratureDrug.literature_id == Literature.id)
+            .join(LiteratureCancer, LiteratureCancer.literature_id == Literature.id)
+            .where(
+                LiteratureDrug.drug_id == drug_id,
+                LiteratureCancer.cancer_type_id == cancer_type_id,
+            )
+            .limit(20)
+        )
+        co_papers_result = await db.execute(co_papers_query)
+        co_papers = co_papers_result.scalars().all()
 
         # Papers mentioning drug with analyzed findings
         analyzed_query = (
@@ -310,7 +323,7 @@ class EvidenceScorer:
         analyzed_result = await db.execute(analyzed_query)
         analyzed_count = analyzed_result.scalar() or 0
 
-        # Check for repurposing-specific papers
+        # Check for repurposing-specific papers (only from fetched subset)
         repurposing_bonus = 0
         for paper in co_papers:
             tags = paper.relevance_tags or []
@@ -383,18 +396,28 @@ class EvidenceScorer:
             return {"score": 0, "details": {"reason": "cancer_not_found"}, "evidence": []}
         cancer_name = cancer_row.name.lower()
 
-        # Find trials for this drug
+        # Count total drug trials (lightweight)
+        total_trial_count_result = await db.execute(
+            select(func.count(ClinicalTrial.id))
+            .join(TrialDrug, TrialDrug.trial_id == ClinicalTrial.id)
+            .where(TrialDrug.drug_id == drug_id)
+        )
+        total_drug_trials = total_trial_count_result.scalar() or 0
+
+        # Fetch limited set of trials for this drug (cap at 50 most recent)
         trial_query = (
             select(ClinicalTrial)
             .join(TrialDrug, TrialDrug.trial_id == ClinicalTrial.id)
             .where(TrialDrug.drug_id == drug_id)
+            .order_by(ClinicalTrial.id.desc())
+            .limit(50)
         )
         trial_result = await db.execute(trial_query)
-        all_trials = trial_result.scalars().all()
+        fetched_trials = trial_result.scalars().all()
 
         # Filter trials relevant to this cancer type
         relevant_trials = []
-        for trial in all_trials:
+        for trial in fetched_trials:
             conditions = trial.conditions or []
             title_lower = trial.title.lower() if trial.title else ""
             condition_match = any(
@@ -467,7 +490,7 @@ class EvidenceScorer:
             "score": score,
             "details": {
                 "relevant_trials": len(relevant_trials),
-                "total_drug_trials": len(all_trials),
+                "total_drug_trials": total_drug_trials,
                 "trial_phase_score": trial_score,
                 "opentargets_bonus": ot_bonus,
             },
@@ -613,16 +636,19 @@ class EvidenceScorer:
         )
         cancer_name = (cancer_name_result.scalar_one_or_none() or "").lower()
 
+        # Fetch limited trials for relevance check (cap at 50 most recent)
         trial_query = (
             select(ClinicalTrial)
             .join(TrialDrug, TrialDrug.trial_id == ClinicalTrial.id)
             .where(TrialDrug.drug_id == drug_id)
+            .order_by(ClinicalTrial.id.desc())
+            .limit(50)
         )
         trial_result = await db.execute(trial_query)
-        all_trials = trial_result.scalars().all()
+        fetched_trials = trial_result.scalars().all()
 
         relevant_trials = 0
-        for trial in all_trials:
+        for trial in fetched_trials:
             conditions = trial.conditions or []
             title_lower = trial.title.lower() if trial.title else ""
             if any(cancer_name in str(c).lower() for c in conditions) or cancer_name in title_lower:

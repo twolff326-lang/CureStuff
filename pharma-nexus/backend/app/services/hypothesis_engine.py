@@ -100,6 +100,7 @@ class HypothesisEngine:
 
                 if (i + 1) % 50 == 0:
                     await db.commit()
+                    db.expire_all()  # Release cached objects from identity map
                     logger.info(
                         "Scored %d/%d candidates for cancer_type_id=%d",
                         i + 1, len(candidates), cancer_type_id,
@@ -112,6 +113,7 @@ class HypothesisEngine:
                 )
 
         await db.commit()
+        db.expire_all()  # Release cached objects after final commit
         logger.info(
             "Generated %d hypotheses for cancer_type_id=%d (threshold=%.1f)",
             len(results), cancer_type_id, min_score,
@@ -160,6 +162,7 @@ class HypothesisEngine:
                 )
 
         await db.commit()
+        db.expire_all()  # Release cached objects after final commit
         logger.info(
             "Generated %d hypotheses for drug_id=%d", len(results), drug_id
         )
@@ -173,44 +176,62 @@ class HypothesisEngine:
         """Rescore all existing hypotheses with current or provided weights.
 
         Used when scoring weights change to update all composite scores.
+        Uses windowed pagination to avoid loading all hypotheses into memory.
         """
         if weights is None:
             weights = await self.config.get_active_weights(db)
 
-        result = await db.execute(
-            select(Hypothesis).order_by(Hypothesis.id)
+        # Count total for progress logging
+        count_result = await db.execute(
+            select(func.count(Hypothesis.id))
         )
-        all_hypotheses = result.scalars().all()
-        total = len(all_hypotheses)
+        total = count_result.scalar() or 0
 
+        BATCH_SIZE = 200
         rescored = 0
-        for hyp in all_hypotheses:
-            try:
-                # Recompute composite from stored dimension scores
-                dimension_scores = {
-                    "pathway_overlap": {"score": hyp.pathway_overlap_score or 0},
-                    "expression_correlation": {"score": hyp.expression_correlation_score or 0},
-                    "literature_support": {"score": hyp.literature_support_score or 0},
-                    "clinical_evidence": {"score": hyp.clinical_evidence_score or 0},
-                    "safety": {"score": hyp.safety_score or 0},
-                    "novelty": {"score": hyp.novelty_score or 0},
-                }
-                new_composite = self.config.compute_composite_score(
-                    dimension_scores, weights
-                )
-                hyp.composite_score = new_composite
-                hyp.evidence_strength = self.config.determine_evidence_strength(
-                    new_composite
-                )
-                rescored += 1
+        offset = 0
 
-                if rescored % 100 == 0:
-                    await db.flush()
+        while offset < total:
+            result = await db.execute(
+                select(Hypothesis)
+                .order_by(Hypothesis.id)
+                .offset(offset)
+                .limit(BATCH_SIZE)
+            )
+            batch = result.scalars().all()
+            if not batch:
+                break
 
-            except Exception as e:
-                logger.warning("Failed rescoring hypothesis %d: %s", hyp.id, e)
+            for hyp in batch:
+                try:
+                    # Recompute composite from stored dimension scores
+                    dimension_scores = {
+                        "pathway_overlap": {"score": hyp.pathway_overlap_score or 0},
+                        "expression_correlation": {"score": hyp.expression_correlation_score or 0},
+                        "literature_support": {"score": hyp.literature_support_score or 0},
+                        "clinical_evidence": {"score": hyp.clinical_evidence_score or 0},
+                        "safety": {"score": hyp.safety_score or 0},
+                        "novelty": {"score": hyp.novelty_score or 0},
+                    }
+                    new_composite = self.config.compute_composite_score(
+                        dimension_scores, weights
+                    )
+                    hyp.composite_score = new_composite
+                    hyp.evidence_strength = self.config.determine_evidence_strength(
+                        new_composite
+                    )
+                    rescored += 1
 
-        await db.commit()
+                except Exception as e:
+                    logger.warning("Failed rescoring hypothesis %d: %s", hyp.id, e)
+
+            await db.commit()
+            db.expire_all()  # Release batch from identity map
+            offset += BATCH_SIZE
+
+            if rescored % 1000 == 0 or offset >= total:
+                logger.info("Rescored %d/%d hypotheses", rescored, total)
+
         logger.info("Rescored %d/%d hypotheses", rescored, total)
         return {"rescored": rescored, "total": total}
 

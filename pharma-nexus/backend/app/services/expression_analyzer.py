@@ -162,24 +162,46 @@ class ExpressionAnalyzer:
         de_results: list[dict],
         db_session: AsyncSession,
     ) -> None:
-        """Store differential expression results in cancer_molecular_profiles."""
-        for r in de_results:
-            if r.get("direction") == "unknown":
-                continue
+        """Store differential expression results in cancer_molecular_profiles.
 
-            alteration_type = (
-                "overexpression" if r["direction"] == "up" else "underexpression"
-            )
+        Uses batch lookups instead of N+1 queries per gene.
+        """
+        # Filter to results with a known direction
+        actionable = [r for r in de_results if r.get("direction") != "unknown"]
+        if not actionable:
+            return
 
-            # Check for existing record
-            existing = await db_session.execute(
+        # Build list of (gene_symbol, alteration_type) pairs we need to upsert
+        gene_alteration_pairs: list[tuple[str, str]] = []
+        result_map: dict[tuple[str, str], dict] = {}
+        for r in actionable:
+            alt_type = "overexpression" if r["direction"] == "up" else "underexpression"
+            key = (r["gene_symbol"], alt_type)
+            gene_alteration_pairs.append(key)
+            result_map[key] = r
+
+        # Batch fetch all existing profiles for this cancer type in one query
+        gene_symbols = list({gene for gene, _ in gene_alteration_pairs})
+        CHUNK_SIZE = 500
+        existing_map: dict[tuple[str, str], CancerMolecularProfile] = {}
+        for i in range(0, len(gene_symbols), CHUNK_SIZE):
+            chunk = gene_symbols[i : i + CHUNK_SIZE]
+            existing_result = await db_session.execute(
                 select(CancerMolecularProfile).where(
                     CancerMolecularProfile.cancer_type_id == cancer_type_id,
-                    CancerMolecularProfile.gene_symbol == r["gene_symbol"],
-                    CancerMolecularProfile.alteration_type == alteration_type,
+                    CancerMolecularProfile.gene_symbol.in_(chunk),
+                    CancerMolecularProfile.alteration_type.in_(
+                        ["overexpression", "underexpression"]
+                    ),
                 )
             )
-            profile = existing.scalar_one_or_none()
+            for profile in existing_result.scalars().all():
+                existing_map[(profile.gene_symbol, profile.alteration_type)] = profile
+
+        # Upsert using the batch-fetched map
+        for key, r in result_map.items():
+            gene_symbol, alteration_type = key
+            profile = existing_map.get(key)
 
             if profile:
                 profile.median_expression = r.get("tumor_median")
@@ -193,7 +215,7 @@ class ExpressionAnalyzer:
                 db_session.add(
                     CancerMolecularProfile(
                         cancer_type_id=cancer_type_id,
-                        gene_symbol=r["gene_symbol"],
+                        gene_symbol=gene_symbol,
                         alteration_type=alteration_type,
                         frequency_percent=None,
                         median_expression=r.get("tumor_median"),
@@ -1002,6 +1024,47 @@ class ExpressionAnalyzer:
             }
 
         # 3. Check for synthetic lethal potential
+        # Pre-fetch all interaction scores for drug target uniprots in batch
+        target_uniprots = [t["uniprot_id"] for t in drug_targets if t["uniprot_id"]]
+        lost_gene_symbols = [lg.gene_symbol for lg in lost_genes]
+
+        # Batch: get uniprot IDs for all lost genes at once
+        lost_uniprot_map: dict[str, str] = {}
+        if lost_gene_symbols:
+            lost_target_result = await db_session.execute(
+                select(Target.gene_symbol, Target.uniprot_id).where(
+                    Target.gene_symbol.in_(lost_gene_symbols)
+                )
+            )
+            for row in lost_target_result:
+                if row.uniprot_id:
+                    lost_uniprot_map[row.gene_symbol] = row.uniprot_id
+
+        # Batch: get all interaction scores between drug targets and lost genes
+        interaction_map: dict[tuple[str, str], int] = {}
+        if target_uniprots and lost_uniprot_map:
+            lost_uniprots = list(lost_uniprot_map.values())
+            int_result = await db_session.execute(
+                select(
+                    ProteinInteraction.protein_a_uniprot,
+                    ProteinInteraction.protein_b_uniprot,
+                    ProteinInteraction.interaction_score,
+                ).where(
+                    (
+                        (ProteinInteraction.protein_a_uniprot.in_(target_uniprots))
+                        & (ProteinInteraction.protein_b_uniprot.in_(lost_uniprots))
+                    )
+                    | (
+                        (ProteinInteraction.protein_a_uniprot.in_(lost_uniprots))
+                        & (ProteinInteraction.protein_b_uniprot.in_(target_uniprots))
+                    )
+                )
+            )
+            for row in int_result:
+                score = int(row.interaction_score * 1000) if row.interaction_score and row.interaction_score < 1 else int(row.interaction_score or 0)
+                interaction_map[(row.protein_a_uniprot, row.protein_b_uniprot)] = score
+                interaction_map[(row.protein_b_uniprot, row.protein_a_uniprot)] = score
+
         potential_pairs: list[dict[str, Any]] = []
 
         for target in drug_targets:
@@ -1009,12 +1072,12 @@ class ExpressionAnalyzer:
                 if target["gene_symbol"] == lost.gene_symbol:
                     continue
 
-                # Check STRING interaction
-                interaction_score = await self._get_interaction_score(
-                    target["uniprot_id"], lost.gene_symbol, db_session
-                )
+                # Look up interaction score from pre-fetched map
+                t_uniprot = target["uniprot_id"] or ""
+                l_uniprot = lost_uniprot_map.get(lost.gene_symbol, "")
+                interaction_score = interaction_map.get((t_uniprot, l_uniprot), 0)
 
-                # Check shared pathways
+                # Check shared pathways (still individual but uses indexed query)
                 shared_pathways = await self._get_shared_pathways(
                     target["gene_symbol"], lost.gene_symbol, db_session
                 )

@@ -78,6 +78,7 @@ def compute_all_differential_expression(self, cancer_type_id=None):
                             cid, session
                         )
                         await session.commit()
+                        session.expire_all()  # Release expression data from identity map
                         results[str(code)] = {
                             "genes_analyzed": len(de_results),
                             "significant": sum(
@@ -178,6 +179,7 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
                             scored += 1
                             if scored % 500 == 0:
                                 await session.commit()
+                                session.expire_all()  # Release cached objects
                                 logger.info(
                                     "Scored %d/%d pairs", scored, total_pairs
                                 )
@@ -264,6 +266,7 @@ def compute_pathway_activities(self, cancer_type_id=None):
                             computed += 1
                             if computed % 1000 == 0:
                                 await session.commit()
+                                session.expire_all()  # Release cached objects
                                 logger.info(
                                     "Computed %d/%d activities",
                                     computed, total,
