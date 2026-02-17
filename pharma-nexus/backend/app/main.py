@@ -8,7 +8,7 @@ from app.config import settings
 from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
     cancer, pathways, literature, clinical_trials, llm_analysis, reports,
-    validation, discovery,
+    validation, discovery, seed,
 )
 
 
@@ -59,6 +59,7 @@ app.include_router(
     validation.router, prefix="/api/validation", tags=["validation"]
 )
 app.include_router(discovery.router, tags=["discovery"])
+app.include_router(seed.router, prefix="/api", tags=["seed"])
 
 
 @app.get("/health")

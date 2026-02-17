@@ -102,6 +102,17 @@ if [ $TRIES -ge $MAX_TRIES ]; then
     echo "  $COMPOSE logs -f backend"
 else
     echo -e "${GREEN}Backend is healthy.${NC}"
+
+    # Auto-seed demo data if database is empty
+    echo "  Loading demo data..."
+    SEED_RESULT=$(curl -s -X POST http://localhost:8000/api/seed 2>/dev/null || echo '{"status":"error"}')
+    if echo "$SEED_RESULT" | grep -q '"seeded"'; then
+        echo -e "  ${GREEN}Demo data loaded (15 drugs, 8 cancers, 20 hypotheses).${NC}"
+    elif echo "$SEED_RESULT" | grep -q '"skipped"'; then
+        echo -e "  ${YELLOW}Database already has data — skipping seed.${NC}"
+    else
+        echo -e "  ${YELLOW}Could not auto-seed. Click 'Load Demo Data' on the dashboard.${NC}"
+    fi
 fi
 
 echo ""
@@ -114,10 +125,10 @@ echo -e "${GREEN}║  API docs:  http://localhost:8000/docs     ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
 echo "Quick start:"
-echo "  1. Open http://localhost:3000"
-echo "  2. Go to Analysis → Generate Hypotheses"
-echo "  3. Run LLM Confidence to activate feedback loop"
-echo "  4. Run LLM Discovery to find novel connections"
+echo "  1. Open http://localhost:3000 — demo data is already loaded"
+echo "  2. Browse Hypotheses to see pre-scored drug repurposing candidates"
+echo "  3. Go to Analysis → LLM Confidence to activate the feedback loop"
+echo "  4. Go to Analysis → LLM Discovery to find novel connections"
 echo ""
 echo "Useful commands:"
 echo "  $COMPOSE logs -f backend    # Backend logs"
