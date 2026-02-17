@@ -80,10 +80,19 @@ export interface IngestionLog {
   completed_at: string | null;
 }
 
+export interface TaskProgress {
+  current: number;
+  total: number;
+  step: string;
+  detail: string;
+  percent: number;
+}
+
 export interface TaskStatus {
   task_id: string;
-  status: "PENDING" | "PROGRESS" | "SUCCESS" | "FAILURE";
+  status: "PENDING" | "STARTED" | "PROGRESS" | "SUCCESS" | "FAILURE" | "RETRY";
   result: Record<string, unknown> | null;
+  progress: TaskProgress | null;
 }
 
 export interface PaginatedResponse<T> {

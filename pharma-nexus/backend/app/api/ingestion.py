@@ -143,8 +143,11 @@ async def get_ingestion_status(
     result = celery_app.AsyncResult(task_id)
     task_state = result.state
     task_result = None
+    progress = None
 
-    if result.ready():
+    if task_state == "PROGRESS" and isinstance(result.info, dict):
+        progress = result.info
+    elif result.ready():
         try:
             task_result = result.result
         except Exception:
@@ -174,6 +177,7 @@ async def get_ingestion_status(
         "task_id": task_id,
         "task_state": task_state,
         "task_result": task_result,
+        "progress": progress,
         "ingestion_log": log_entry,
     }
 

@@ -203,6 +203,15 @@ def generate_all_reports(self):
 
             async with async_session_factory() as session:
                 # 1. Executive summary
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 1, "total": 4,
+                        "step": "Executive Summary",
+                        "detail": "Phase 1/4: Generating executive summary",
+                        "percent": 0,
+                    },
+                )
                 try:
                     filepath = await generator.generate_executive_summary(session)
                     await session.commit()
@@ -213,6 +222,15 @@ def generate_all_reports(self):
                     results["errors"].append(f"executive_summary: {e}")
 
                 # 2. Novel discoveries
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 2, "total": 4,
+                        "step": "Novel Discoveries",
+                        "detail": "Phase 2/4: Generating novel discoveries report",
+                        "percent": 25,
+                    },
+                )
                 try:
                     filepath = await generator.generate_novel_discoveries_report(
                         session
@@ -229,7 +247,17 @@ def generate_all_reports(self):
                     select(CancerType.id, CancerType.tcga_code)
                 )
                 cancer_types = cancer_result.all()
-                for cid, code in cancer_types:
+                total_cancers = len(cancer_types)
+                for ci, (cid, code) in enumerate(cancer_types):
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "current": 3, "total": 4,
+                            "step": "Cancer Summaries",
+                            "detail": f"Phase 3/4: Cancer summary {code} ({ci + 1}/{total_cancers})",
+                            "percent": 50 + round((ci / max(total_cancers, 1)) * 25),
+                        },
+                    )
                     try:
                         filepath = await generator.generate_cancer_summary_report(
                             cid, session
@@ -251,8 +279,18 @@ def generate_all_reports(self):
                         .limit(50)
                     )
                 ).scalars().all()
+                total_hyps = len(top_hypotheses)
 
-                for hid in top_hypotheses:
+                for hi, hid in enumerate(top_hypotheses):
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "current": 4, "total": 4,
+                            "step": "Hypothesis Reports",
+                            "detail": f"Phase 4/4: Hypothesis report {hi + 1}/{total_hyps}",
+                            "percent": 75 + round((hi / max(total_hyps, 1)) * 25),
+                        },
+                    )
                     try:
                         filepath = await generator.generate_hypothesis_report(
                             hid, session

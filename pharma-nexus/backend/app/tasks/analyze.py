@@ -65,9 +65,27 @@ def compute_all_differential_expression(self, cancer_type_id=None):
                     cancer_ids = [(row.id, row.tcga_code) for row in result]
 
                 total = len(cancer_ids)
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 0, "total": total,
+                        "step": "Differential Expression",
+                        "detail": f"Starting DE analysis for {total} cancer types",
+                        "percent": 0,
+                    },
+                )
                 for i, item in enumerate(cancer_ids):
                     cid = item if isinstance(item, int) else item[0]
                     code = item if isinstance(item, int) else item[1]
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "current": i, "total": total,
+                            "step": "Differential Expression",
+                            "detail": f"Processing {code} ({i + 1}/{total})",
+                            "percent": round((i / total) * 100),
+                        },
+                    )
                     logger.info(
                         "Processing cancer type %s (%d/%d)",
                         code, i + 1, total,
@@ -169,6 +187,15 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
                     len(drug_ids),
                     len(cancer_ids),
                 )
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 0, "total": total_pairs,
+                        "step": "Drug Expression Scoring",
+                        "detail": f"Starting scoring for {total_pairs} drug-cancer pairs",
+                        "percent": 0,
+                    },
+                )
 
                 for cid in cancer_ids:
                     for did in drug_ids:
@@ -180,6 +207,16 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
                             if scored % 500 == 0:
                                 await session.commit()
                                 session.expire_all()  # Release cached objects
+                                pct = round((scored / total_pairs) * 100)
+                                self.update_state(
+                                    state="PROGRESS",
+                                    meta={
+                                        "current": scored, "total": total_pairs,
+                                        "step": "Drug Expression Scoring",
+                                        "detail": f"Scored {scored}/{total_pairs} pairs",
+                                        "percent": pct,
+                                    },
+                                )
                                 logger.info(
                                     "Scored %d/%d pairs", scored, total_pairs
                                 )
@@ -256,6 +293,15 @@ def compute_pathway_activities(self, cancer_type_id=None):
                     len(pathway_ids),
                     len(cancer_ids),
                 )
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 0, "total": total,
+                        "step": "Pathway Activities",
+                        "detail": f"Starting computation for {total} pathway-cancer pairs",
+                        "percent": 0,
+                    },
+                )
 
                 for cid in cancer_ids:
                     for pid in pathway_ids:
@@ -267,6 +313,16 @@ def compute_pathway_activities(self, cancer_type_id=None):
                             if computed % 1000 == 0:
                                 await session.commit()
                                 session.expire_all()  # Release cached objects
+                                pct = round((computed / total) * 100)
+                                self.update_state(
+                                    state="PROGRESS",
+                                    meta={
+                                        "current": computed, "total": total,
+                                        "step": "Pathway Activities",
+                                        "detail": f"Computed {computed}/{total} activities",
+                                        "percent": pct,
+                                    },
+                                )
                                 logger.info(
                                     "Computed %d/%d activities",
                                     computed, total,
@@ -298,8 +354,8 @@ def compute_pathway_activities(self, cancer_type_id=None):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(name="app.tasks.analyze.run_full_expression_analysis")
-def run_full_expression_analysis(cancer_type_id=None):
+@celery_app.task(bind=True, name="app.tasks.analyze.run_full_expression_analysis")
+def run_full_expression_analysis(self, cancer_type_id=None):
     """Run the complete expression analysis pipeline:
 
     1. Differential expression for all cancer types
@@ -312,18 +368,45 @@ def run_full_expression_analysis(cancer_type_id=None):
     logger.info("Starting full expression analysis pipeline")
 
     # Step 1: Differential expression
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 1, "total": 3,
+            "step": "Differential Expression",
+            "detail": "Step 1/3: Running differential expression analysis",
+            "percent": 0,
+        },
+    )
     de_result = compute_all_differential_expression.apply(
         kwargs={"cancer_type_id": cancer_type_id}
     )
     de_result.get(timeout=7200)  # 2h timeout
 
     # Step 2: Drug expression scores
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 2, "total": 3,
+            "step": "Drug Expression Scoring",
+            "detail": "Step 2/3: Scoring drug-cancer expression pairs",
+            "percent": 33,
+        },
+    )
     drug_result = compute_drug_expression_scores.apply(
         kwargs={"cancer_type_id": cancer_type_id}
     )
     drug_result.get(timeout=14400)  # 4h timeout
 
     # Step 3: Pathway activities
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 3, "total": 3,
+            "step": "Pathway Activities",
+            "detail": "Step 3/3: Computing pathway activity scores",
+            "percent": 66,
+        },
+    )
     pathway_result = compute_pathway_activities.apply(
         kwargs={"cancer_type_id": cancer_type_id}
     )
@@ -354,6 +437,15 @@ def generate_narratives_batch(self, min_score=0.0, limit=100):
         "Starting narrative batch generation (min_score=%.1f, limit=%d)",
         min_score,
         limit,
+    )
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 0, "total": limit,
+            "step": "Generating Narratives",
+            "detail": f"Generating narratives for up to {limit} hypotheses",
+            "percent": 0,
+        },
     )
     try:
 
@@ -397,6 +489,15 @@ def generate_full_analysis_batch(self, min_score=50.0, limit=20):
         min_score,
         limit,
     )
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 0, "total": limit,
+            "step": "Full Analysis",
+            "detail": f"Running 6 analysis types for up to {limit} hypotheses",
+            "percent": 0,
+        },
+    )
     try:
 
         async def _generate():
@@ -438,6 +539,15 @@ def generate_comparative_analyses(self, cancer_type_id=None, min_score=30.0):
         "Starting comparative analysis generation (cancer_type_id=%s, min_score=%.1f)",
         cancer_type_id,
         min_score,
+    )
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": 0, "total": 0,
+            "step": "Comparative Analysis",
+            "detail": "Generating comparative analyses by cancer type",
+            "percent": 0,
+        },
     )
     try:
 

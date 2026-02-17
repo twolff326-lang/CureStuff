@@ -2,24 +2,65 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
-import type { CancerType, TaskStatus } from "@/types";
+import type { CancerType, TaskProgress, TaskStatus } from "@/types";
+
+const STORAGE_KEY = "pharma-nexus-jobs";
 
 interface Job {
   taskId: string;
   type: string;
   label: string;
-  startedAt: Date;
+  startedAt: string; // ISO string for serialization
   status: TaskStatus["status"];
   result: Record<string, unknown> | null;
+  progress: TaskProgress | null;
+}
+
+function isActive(status: string): boolean {
+  return status === "PENDING" || status === "STARTED" || status === "PROGRESS";
+}
+
+function loadJobs(): Job[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as Job[];
+  } catch {
+    return [];
+  }
+}
+
+function saveJobs(jobs: Job[]) {
+  try {
+    // Keep last 50 jobs
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs.slice(0, 50)));
+  } catch {
+    // localStorage full or unavailable
+  }
+}
+
+function formatElapsed(startIso: string): string {
+  const ms = Date.now() - new Date(startIso).getTime();
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  if (mins < 60) return `${mins}m ${secs}s`;
+  const hrs = Math.floor(mins / 60);
+  const remainMins = mins % 60;
+  return `${hrs}h ${remainMins}m`;
 }
 
 export default function AnalysisPage() {
   const [cancerTypes, setCancerTypes] = useState<CancerType[]>([]);
   const [selectedCancer, setSelectedCancer] = useState<string>("");
   const [minScore, setMinScore] = useState(15);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<Job[]>(loadJobs);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [, setTick] = useState(0); // Force re-render for elapsed time
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load cancer types
   useEffect(() => {
@@ -28,17 +69,38 @@ export default function AnalysisPage() {
       .catch(() => {});
   }, []);
 
+  // Persist jobs to localStorage
+  useEffect(() => {
+    saveJobs(jobs);
+  }, [jobs]);
+
+  // Tick elapsed time every second while jobs are active
+  useEffect(() => {
+    const hasActiveJobs = jobs.some((j) => isActive(j.status));
+    if (hasActiveJobs && !tickRef.current) {
+      tickRef.current = setInterval(() => setTick((t) => t + 1), 1000);
+    } else if (!hasActiveJobs && tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, [jobs]);
+
+  // Determine correct status endpoint per job type
+  function statusUrl(job: Job): string {
+    if (job.type === "expression") return `/api/analysis/status/${job.taskId}`;
+    return `/api/hypotheses/status/${job.taskId}`;
+  }
+
   // Poll active jobs
   const pollJobs = useCallback(async () => {
-    const activeJobs = jobs.filter(
-      (j) => j.status === "PENDING" || j.status === "PROGRESS"
-    );
+    const activeJobs = jobs.filter((j) => isActive(j.status));
     if (activeJobs.length === 0) return;
 
     const updates = await Promise.allSettled(
-      activeJobs.map((j) =>
-        fetchApi<TaskStatus>(`/api/hypotheses/status/${j.taskId}`)
-      )
+      activeJobs.map((j) => fetchApi<TaskStatus>(statusUrl(j)))
     );
 
     setJobs((prev) =>
@@ -51,6 +113,7 @@ export default function AnalysisPage() {
             ...job,
             status: res.value.status,
             result: res.value.result,
+            progress: res.value.progress ?? job.progress,
           };
         }
         return job;
@@ -59,12 +122,10 @@ export default function AnalysisPage() {
   }, [jobs]);
 
   useEffect(() => {
-    const hasActive = jobs.some(
-      (j) => j.status === "PENDING" || j.status === "PROGRESS"
-    );
-    if (hasActive && !pollRef.current) {
+    const hasActiveJobs = jobs.some((j) => isActive(j.status));
+    if (hasActiveJobs && !pollRef.current) {
       pollRef.current = setInterval(pollJobs, 3000);
-    } else if (!hasActive && pollRef.current) {
+    } else if (!hasActiveJobs && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
@@ -122,9 +183,10 @@ export default function AnalysisPage() {
           taskId: data.task_id,
           type,
           label,
-          startedAt: new Date(),
+          startedAt: new Date().toISOString(),
           status: "PENDING",
           result: null,
+          progress: null,
         },
         ...prev,
       ]);
@@ -138,6 +200,14 @@ export default function AnalysisPage() {
       setSubmitting(null);
     }
   }
+
+  function clearCompleted() {
+    setJobs((prev) => prev.filter((j) => isActive(j.status)));
+  }
+
+  const activeCount = jobs.filter((j) => isActive(j.status)).length;
+  const completedCount = jobs.filter((j) => j.status === "SUCCESS").length;
+  const failedCount = jobs.filter((j) => j.status === "FAILURE").length;
 
   return (
     <div>
@@ -214,15 +284,23 @@ export default function AnalysisPage() {
           <h3 className="text-sm font-medium text-slate-800 mb-1">
             Quick Stats
           </h3>
+          <p className="text-xs text-slate-400 mb-1">
+            Active: <span className="font-medium text-blue-700">{activeCount}</span>
+          </p>
+          <p className="text-xs text-slate-400 mb-1">
+            Completed: <span className="font-medium text-emerald-700">{completedCount}</span>
+          </p>
           <p className="text-xs text-slate-400 mb-3">
-            Active jobs: {jobs.filter((j) => j.status === "PENDING" || j.status === "PROGRESS").length}
+            Failed: <span className="font-medium text-red-700">{failedCount}</span>
           </p>
-          <p className="text-xs text-slate-400">
-            Completed: {jobs.filter((j) => j.status === "SUCCESS").length}
-          </p>
-          <p className="text-xs text-slate-400">
-            Failed: {jobs.filter((j) => j.status === "FAILURE").length}
-          </p>
+          {(completedCount > 0 || failedCount > 0) && (
+            <button
+              onClick={clearCompleted}
+              className="text-xs text-slate-500 hover:text-slate-700 underline mt-auto self-start"
+            >
+              Clear finished
+            </button>
+          )}
         </div>
       </div>
 
@@ -278,16 +356,43 @@ function ActionCard({
 
 const STATUS_STYLES: Record<string, string> = {
   PENDING: "bg-amber-100 text-amber-800",
+  STARTED: "bg-amber-100 text-amber-800",
   PROGRESS: "bg-blue-100 text-blue-800",
   SUCCESS: "bg-emerald-100 text-emerald-800",
   FAILURE: "bg-red-100 text-red-800",
+  RETRY: "bg-orange-100 text-orange-800",
 };
 
+function ProgressBar({ progress }: { progress: TaskProgress }) {
+  const pct = Math.max(0, Math.min(100, progress.percent));
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-medium text-slate-600">
+          {progress.step}
+        </span>
+        <span className="text-xs font-bold text-slate-700">{pct}%</span>
+      </div>
+      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-blue-500 transition-all duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-xs text-slate-400 mt-1">{progress.detail}</p>
+    </div>
+  );
+}
+
 function JobCard({ job }: { job: Job }) {
-  const isActive = job.status === "PENDING" || job.status === "PROGRESS";
+  const active = isActive(job.status);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+    <div
+      className={`bg-white rounded-lg shadow-sm border p-4 ${
+        active ? "border-blue-200" : "border-slate-200"
+      }`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2">
@@ -301,14 +406,20 @@ function JobCard({ job }: { job: Job }) {
             >
               {job.status}
             </span>
-            {isActive && (
+            {active && (
               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
             )}
           </div>
-          <div className="text-xs text-slate-400 mt-1">
-            Started: {job.startedAt.toLocaleTimeString()}
-            <span className="mx-2">|</span>
-            Task ID: {job.taskId.slice(0, 8)}...
+          <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
+            <span>
+              Started: {new Date(job.startedAt).toLocaleTimeString()}
+            </span>
+            {active && (
+              <span className="font-medium text-blue-600">
+                Elapsed: {formatElapsed(job.startedAt)}
+              </span>
+            )}
+            <span>ID: {job.taskId.slice(0, 8)}...</span>
           </div>
         </div>
         {job.status === "SUCCESS" && job.result && (
@@ -331,13 +442,28 @@ function JobCard({ job }: { job: Job }) {
           </div>
         )}
         {job.status === "FAILURE" && job.result && (
-          <div className="text-right">
+          <div className="text-right max-w-xs">
             <span className="text-xs text-red-600">
               {String(job.result.error ?? "Task failed")}
             </span>
           </div>
         )}
       </div>
+
+      {/* Progress bar for active jobs */}
+      {active && job.progress && <ProgressBar progress={job.progress} />}
+
+      {/* Waiting indicator when no progress yet */}
+      {active && !job.progress && (
+        <div className="mt-2">
+          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+            <div className="h-full w-1/3 rounded-full bg-slate-300 animate-pulse" />
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Waiting for worker to pick up task...
+          </p>
+        </div>
+      )}
     </div>
   );
 }

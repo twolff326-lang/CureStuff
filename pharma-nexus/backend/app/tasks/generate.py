@@ -173,7 +173,25 @@ def generate_all_hypotheses(self, min_score=15.0):
                 cancer_types = cancer_result.all()
                 total = len(cancer_types)
 
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "current": 0, "total": total,
+                        "step": "Hypothesis Generation",
+                        "detail": f"Starting generation for {total} cancer types",
+                        "percent": 0,
+                    },
+                )
                 for i, (cid, code) in enumerate(cancer_types):
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "current": i, "total": total,
+                            "step": "Hypothesis Generation",
+                            "detail": f"Processing {code} ({i + 1}/{total})",
+                            "percent": round((i / total) * 100),
+                        },
+                    )
                     logger.info(
                         "Generating hypotheses for %s (%d/%d)",
                         code, i + 1, total,
