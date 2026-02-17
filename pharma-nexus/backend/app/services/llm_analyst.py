@@ -1052,6 +1052,13 @@ class LLMAnalyst:
         result = await self._call_claude(system_prompt, user_prompt, model)
         await self._store_analysis(hypothesis_id, "confidence", result, session)
 
+        # === FEEDBACK LOOP: write confidence back into the hypothesis ===
+        content = result["content"]
+        if isinstance(content, dict):
+            await self._apply_confidence_to_hypothesis(
+                hypothesis, content, session
+            )
+
         return {
             "hypothesis_id": hypothesis_id,
             "analysis_type": "confidence",
@@ -1063,6 +1070,63 @@ class LLMAnalyst:
             },
             "generation_time": result.get("generation_time"),
         }
+
+    async def _apply_confidence_to_hypothesis(
+        self,
+        hypothesis: "Hypothesis",
+        confidence_content: dict,
+        session: AsyncSession,
+    ) -> None:
+        """Extract LLM confidence and apply it to the hypothesis scoring.
+
+        This is THE feedback loop: the LLM's biological reasoning now flows
+        back into the ranking that determines which hypotheses scientists see.
+        """
+        from app.services.scoring_config import ScoringConfig
+
+        # Extract overall_confidence (0-100)
+        llm_confidence = confidence_content.get("overall_confidence")
+        if llm_confidence is not None:
+            try:
+                llm_confidence = float(llm_confidence)
+                llm_confidence = min(max(llm_confidence, 0), 100)
+            except (TypeError, ValueError):
+                llm_confidence = None
+
+        # Extract recommendation
+        recommendation = confidence_content.get("recommendation")
+        valid_recommendations = {
+            "proceed_immediately", "proceed_with_caution",
+            "additional_data_needed", "deprioritize",
+        }
+        if recommendation not in valid_recommendations:
+            recommendation = None
+
+        # Write to hypothesis
+        hypothesis.llm_confidence_score = llm_confidence
+        hypothesis.llm_recommendation = recommendation
+
+        # Compute adjusted score: composite * confidence gate
+        config = ScoringConfig()
+        adjusted = config.compute_adjusted_score(
+            hypothesis.composite_score, llm_confidence
+        )
+        hypothesis.adjusted_score = adjusted
+
+        # Update evidence strength based on adjusted score (the real ranking)
+        hypothesis.evidence_strength = config.determine_evidence_strength(adjusted)
+
+        await session.flush()
+
+        logger.info(
+            "Hypothesis %d: composite=%.1f, llm_confidence=%.1f, "
+            "adjusted=%.1f, recommendation=%s",
+            hypothesis.id,
+            hypothesis.composite_score,
+            llm_confidence or 0,
+            adjusted,
+            recommendation,
+        )
 
     # ------------------------------------------------------------------
     # Batch / orchestration methods

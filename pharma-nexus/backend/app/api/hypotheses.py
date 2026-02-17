@@ -68,7 +68,10 @@ async def get_top_hypotheses(
     cancer_type_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Top hypotheses by composite score."""
+    """Top hypotheses ranked by adjusted score (composite * LLM confidence gate).
+
+    Hypotheses without LLM analysis yet fall back to composite_score.
+    """
     query = select(Hypothesis).where(
         Hypothesis.composite_score >= min_score
     )
@@ -78,7 +81,10 @@ async def get_top_hypotheses(
     if cancer_type_id:
         query = query.where(Hypothesis.cancer_type_id == cancer_type_id)
 
-    query = query.order_by(Hypothesis.composite_score.desc()).limit(limit)
+    # Rank by adjusted_score when available, else composite_score
+    query = query.order_by(
+        func.coalesce(Hypothesis.adjusted_score, Hypothesis.composite_score).desc()
+    ).limit(limit)
     result = await db.execute(query)
     hypotheses = result.scalars().all()
 
@@ -449,7 +455,7 @@ async def list_hypotheses(
     evidence_strength: str | None = Query(None),
     cancer_type_id: int | None = Query(None),
     drug_id: int | None = Query(None),
-    sort_by: str = Query("composite_score", description="composite_score, novelty_score, created_at"),
+    sort_by: str = Query("adjusted_score", description="adjusted_score, composite_score, novelty_score, created_at"),
     db: AsyncSession = Depends(get_db),
 ):
     """Paginated list of hypotheses with filtering and sorting."""
@@ -476,8 +482,13 @@ async def list_hypotheses(
         query = query.order_by(Hypothesis.novelty_score.desc().nulls_last())
     elif sort_by == "created_at":
         query = query.order_by(Hypothesis.created_at.desc())
-    else:
+    elif sort_by == "composite_score":
         query = query.order_by(Hypothesis.composite_score.desc())
+    else:
+        # Default: adjusted_score (falls back to composite when no LLM analysis)
+        query = query.order_by(
+            func.coalesce(Hypothesis.adjusted_score, Hypothesis.composite_score).desc()
+        )
 
     # Count
     total_result = await db.execute(count_query)
@@ -510,6 +521,9 @@ def _serialize_hypothesis(h: Hypothesis) -> dict:
         "title": h.title,
         "summary": h.summary,
         "composite_score": h.composite_score,
+        "adjusted_score": h.adjusted_score,
+        "llm_confidence_score": h.llm_confidence_score,
+        "llm_recommendation": h.llm_recommendation,
         "evidence_strength": h.evidence_strength,
         "dimension_scores": {
             "pathway_overlap": h.pathway_overlap_score,

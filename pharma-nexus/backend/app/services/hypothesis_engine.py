@@ -217,8 +217,14 @@ class HypothesisEngine:
                         dimension_scores, weights
                     )
                     hyp.composite_score = new_composite
+
+                    # Recompute adjusted score using existing LLM confidence
+                    adjusted = self.config.compute_adjusted_score(
+                        new_composite, hyp.llm_confidence_score
+                    )
+                    hyp.adjusted_score = adjusted
                     hyp.evidence_strength = self.config.determine_evidence_strength(
-                        new_composite
+                        adjusted
                     )
                     rescored += 1
 
@@ -701,18 +707,26 @@ class HypothesisEngine:
         )
         hypothesis = existing_result.scalar_one_or_none()
 
+        # Before LLM analysis runs, adjusted_score = composite (passthrough)
+        adjusted = self.config.compute_adjusted_score(composite, None)
+
         if hypothesis:
-            # Update existing
+            # Update existing — preserve existing LLM confidence if present
             hypothesis.title = title
             hypothesis.summary = summary
             hypothesis.composite_score = composite
-            hypothesis.evidence_strength = evidence_strength
             hypothesis.pathway_overlap_score = dimension_scores["pathway_overlap"]["score"]
             hypothesis.expression_correlation_score = dimension_scores["expression_correlation"]["score"]
             hypothesis.literature_support_score = dimension_scores["literature_support"]["score"]
             hypothesis.clinical_evidence_score = dimension_scores["clinical_evidence"]["score"]
             hypothesis.safety_score = dimension_scores["safety"]["score"]
             hypothesis.novelty_score = dimension_scores["novelty"]["score"]
+            # Recompute adjusted score with existing LLM confidence
+            adjusted = self.config.compute_adjusted_score(
+                composite, hypothesis.llm_confidence_score
+            )
+            hypothesis.adjusted_score = adjusted
+            hypothesis.evidence_strength = self.config.determine_evidence_strength(adjusted)
         else:
             # Create new
             hypothesis = Hypothesis(
@@ -722,6 +736,7 @@ class HypothesisEngine:
                 summary=summary,
                 composite_score=composite,
                 evidence_strength=evidence_strength,
+                adjusted_score=adjusted,
                 pathway_overlap_score=dimension_scores["pathway_overlap"]["score"],
                 expression_correlation_score=dimension_scores["expression_correlation"]["score"],
                 literature_support_score=dimension_scores["literature_support"]["score"],

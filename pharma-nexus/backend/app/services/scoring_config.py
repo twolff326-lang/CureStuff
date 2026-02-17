@@ -220,6 +220,31 @@ class ScoringConfig:
 
         return round(min(max(composite, 0), 100), 1)
 
+    def compute_adjusted_score(
+        self,
+        composite_score: float,
+        llm_confidence: float | None,
+    ) -> float:
+        """Compute the adjusted score using LLM confidence as a multiplicative gate.
+
+        The LLM confidence (0-100) acts as a reality check. It modulates the
+        composite score by a factor that ranges from 0.3 (confidence=0) to
+        1.0 (confidence=100). This means:
+          - LLM confidence of 100 → adjusted = composite (no change)
+          - LLM confidence of  50 → adjusted = composite * 0.65
+          - LLM confidence of   0 → adjusted = composite * 0.30
+          - No LLM analysis yet  → adjusted = composite (passthrough)
+
+        The floor of 0.3 prevents a single bad LLM call from zeroing a hypothesis.
+        The gate only compresses; it never inflates above composite.
+        """
+        if llm_confidence is None:
+            return composite_score
+
+        # Map confidence (0-100) to gate factor (0.3 - 1.0)
+        gate = 0.3 + 0.7 * (llm_confidence / 100.0)
+        return round(min(max(composite_score * gate, 0), 100), 1)
+
     def determine_evidence_strength(self, composite_score: float) -> str:
         """Map composite score to evidence strength category."""
         if composite_score >= 75:

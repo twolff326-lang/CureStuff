@@ -404,6 +404,76 @@ class TestExpressionCompatibility:
 
 
 # =====================================================================
+# Adjusted score (LLM confidence gate) tests
+# =====================================================================
+
+
+class TestAdjustedScore:
+    """Test the multiplicative LLM confidence gate."""
+
+    def setup_method(self):
+        self.config = ScoringConfig()
+
+    def test_no_confidence_is_passthrough(self):
+        """Without LLM analysis, adjusted = composite."""
+        assert self.config.compute_adjusted_score(80.0, None) == 80.0
+
+    def test_full_confidence_unchanged(self):
+        """LLM confidence of 100 = no change."""
+        assert self.config.compute_adjusted_score(80.0, 100.0) == 80.0
+
+    def test_zero_confidence_floors_at_30_percent(self):
+        """LLM confidence of 0 = composite * 0.30."""
+        result = self.config.compute_adjusted_score(80.0, 0.0)
+        assert result == 24.0  # 80 * 0.3
+
+    def test_mid_confidence_reduces_proportionally(self):
+        """LLM confidence of 50 = composite * 0.65."""
+        result = self.config.compute_adjusted_score(100.0, 50.0)
+        assert result == 65.0  # 100 * (0.3 + 0.7 * 0.5)
+
+    def test_low_confidence_tanks_score(self):
+        """LLM confidence of 10 (very_low) should significantly reduce score."""
+        result = self.config.compute_adjusted_score(80.0, 10.0)
+        # gate = 0.3 + 0.7 * 0.1 = 0.37
+        assert result == 29.6  # 80 * 0.37
+
+    def test_never_exceeds_composite(self):
+        """Adjusted score can never be higher than composite."""
+        for conf in [0, 25, 50, 75, 100]:
+            adj = self.config.compute_adjusted_score(80.0, conf)
+            assert adj <= 80.0
+
+    def test_clamped_at_zero(self):
+        """Negative composite scores get clamped."""
+        result = self.config.compute_adjusted_score(-10.0, 50.0)
+        assert result == 0.0
+
+    def test_clamped_at_100(self):
+        """Scores above 100 get clamped."""
+        result = self.config.compute_adjusted_score(120.0, 100.0)
+        assert result == 100.0
+
+    def test_real_scenario_deprioritize(self):
+        """A hypothesis with high composite but low LLM confidence should drop."""
+        composite = 72.0  # "moderate" strength
+        llm_confidence = 15.0  # low confidence — LLM found problems
+        adjusted = self.config.compute_adjusted_score(composite, llm_confidence)
+        # gate = 0.3 + 0.7 * 0.15 = 0.405
+        assert adjusted == 29.2  # Was moderate, now speculative
+        assert self.config.determine_evidence_strength(adjusted) == "suggestive"
+
+    def test_real_scenario_proceed_immediately(self):
+        """High composite + high LLM confidence should stay high."""
+        composite = 72.0
+        llm_confidence = 85.0
+        adjusted = self.config.compute_adjusted_score(composite, llm_confidence)
+        # gate = 0.3 + 0.7 * 0.85 = 0.895
+        assert adjusted == 64.4
+        assert self.config.determine_evidence_strength(adjusted) == "moderate"
+
+
+# =====================================================================
 # Ground truth dataset validation
 # =====================================================================
 

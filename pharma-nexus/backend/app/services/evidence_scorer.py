@@ -317,7 +317,7 @@ class EvidenceScorer:
             .join(LiteratureDrug, LiteratureDrug.literature_id == Literature.id)
             .where(
                 LiteratureDrug.drug_id == drug_id,
-                Literature.analysis_status == "completed",
+                Literature.analysis_status == "analyzed",
             )
         )
         analyzed_result = await db.execute(analyzed_query)

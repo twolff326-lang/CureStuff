@@ -466,3 +466,218 @@ class TestOutcomeSummary:
         svc = ValidationService()
         summary = await svc.get_outcome_summary(db)
         assert summary["total_outcomes"] == 0
+
+
+# =====================================================================
+# LLM Confidence Feedback Loop tests
+# =====================================================================
+
+
+class TestConfidenceFeedbackLoop:
+    """Test that LLM confidence flows back into hypothesis scoring."""
+
+    def _make_hypothesis(self, db, drug, cancer, composite=70.0):
+        from app.models.hypothesis import Hypothesis
+
+        hyp = Hypothesis(
+            drug_id=drug.id,
+            cancer_type_id=cancer.id,
+            title=f"Feedback test ({composite})",
+            composite_score=composite,
+            adjusted_score=composite,  # Starts as passthrough
+            pathway_overlap_score=70,
+            expression_correlation_score=60,
+            literature_support_score=80,
+            clinical_evidence_score=50,
+            safety_score=65,
+            novelty_score=55,
+        )
+        db.add(hyp)
+        return hyp
+
+    @pytest.mark.asyncio
+    async def test_confidence_writes_to_hypothesis(self, db):
+        """After apply, llm_confidence_score should be set on the hypothesis."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB11111", name="FeedbackDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="FB1", name="Feedback Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=72.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)  # Skip __init__ (no API key needed)
+        confidence_content = {
+            "overall_confidence": 85,
+            "recommendation": "proceed_with_caution",
+        }
+        await analyst._apply_confidence_to_hypothesis(hyp, confidence_content, db)
+
+        assert hyp.llm_confidence_score == 85.0
+        assert hyp.llm_recommendation == "proceed_with_caution"
+        assert hyp.adjusted_score is not None
+        assert hyp.adjusted_score < hyp.composite_score  # Gate compresses
+
+    @pytest.mark.asyncio
+    async def test_high_confidence_preserves_ranking(self, db):
+        """High LLM confidence should barely change the adjusted score."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB22222", name="HighConfDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="HC1", name="HighConf Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=80.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        await analyst._apply_confidence_to_hypothesis(
+            hyp,
+            {"overall_confidence": 95, "recommendation": "proceed_immediately"},
+            db,
+        )
+
+        # gate = 0.3 + 0.7 * 0.95 = 0.965 → adjusted = 80 * 0.965 = 77.2
+        assert hyp.adjusted_score == 77.2
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_tanks_ranking(self, db):
+        """Low LLM confidence should dramatically reduce adjusted score."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB33333", name="LowConfDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="LC1", name="LowConf Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=80.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        await analyst._apply_confidence_to_hypothesis(
+            hyp,
+            {"overall_confidence": 10, "recommendation": "deprioritize"},
+            db,
+        )
+
+        # gate = 0.3 + 0.7 * 0.1 = 0.37 → adjusted = 80 * 0.37 = 29.6
+        assert hyp.adjusted_score == 29.6
+        assert hyp.llm_recommendation == "deprioritize"
+
+    @pytest.mark.asyncio
+    async def test_reranking_with_confidence(self, db):
+        """Hypothesis B (lower composite but higher confidence) should outrank
+        Hypothesis A (higher composite but low confidence) after LLM analysis."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB44444", name="RerankDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="RR1", name="Rerank Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp_a = self._make_hypothesis(db, drug, cancer, composite=80.0)
+        hyp_b = self._make_hypothesis(db, drug, cancer, composite=60.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+
+        # A: high composite but LLM says "deprioritize"
+        await analyst._apply_confidence_to_hypothesis(
+            hyp_a, {"overall_confidence": 15, "recommendation": "deprioritize"}, db
+        )
+        # B: lower composite but LLM says "proceed"
+        await analyst._apply_confidence_to_hypothesis(
+            hyp_b, {"overall_confidence": 90, "recommendation": "proceed_immediately"}, db
+        )
+
+        # B should now outrank A
+        assert hyp_b.adjusted_score > hyp_a.adjusted_score
+
+    @pytest.mark.asyncio
+    async def test_invalid_confidence_ignored(self, db):
+        """Invalid confidence values should be handled gracefully."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB55555", name="InvalidDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="IV1", name="Invalid Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=70.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+
+        # Confidence is a string (bad LLM output)
+        await analyst._apply_confidence_to_hypothesis(
+            hyp, {"overall_confidence": "not a number"}, db
+        )
+        # Should fall through to None → passthrough
+        assert hyp.llm_confidence_score is None
+        assert hyp.adjusted_score == 70.0
+
+    @pytest.mark.asyncio
+    async def test_confidence_clamped_to_range(self, db):
+        """Confidence values outside 0-100 should be clamped."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB56666", name="ClampDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="CL1", name="Clamp Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=70.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+
+        # LLM returns confidence > 100
+        await analyst._apply_confidence_to_hypothesis(
+            hyp, {"overall_confidence": 150}, db
+        )
+        assert hyp.llm_confidence_score == 100.0
+        assert hyp.adjusted_score == 70.0  # gate = 1.0
+
+    @pytest.mark.asyncio
+    async def test_invalid_recommendation_ignored(self, db):
+        """Unknown recommendation values should be set to None."""
+        from app.models.cancer_type import CancerType
+        from app.models.drug import Drug
+        from app.services.llm_analyst import LLMAnalyst
+
+        drug = Drug(drugbank_id="DB57777", name="BadRecDrug", status="approved")
+        db.add(drug)
+        cancer = CancerType(tcga_code="BR1", name="BadRec Cancer")
+        db.add(cancer)
+        await db.flush()
+
+        hyp = self._make_hypothesis(db, drug, cancer, composite=70.0)
+        await db.flush()
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        await analyst._apply_confidence_to_hypothesis(
+            hyp, {"overall_confidence": 80, "recommendation": "yolo"}, db
+        )
+        assert hyp.llm_recommendation is None
+        assert hyp.llm_confidence_score == 80.0
