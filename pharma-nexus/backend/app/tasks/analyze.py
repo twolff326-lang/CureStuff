@@ -1,5 +1,328 @@
-"""Celery tasks for running analyses (pathway enrichment,
-expression correlation, evidence scoring).
+"""Celery tasks for running gene expression analyses.
 
-Task implementations will be added in future prompts.
+Tasks:
+  - compute_all_differential_expression: DE analysis for all 33 cancer types
+  - compute_drug_expression_scores: Score drug-cancer pairs on expression compatibility
+  - compute_pathway_activities: Pathway activity scores for all pathway-cancer combos
+  - run_full_expression_analysis: Complete pipeline combining all analyses
 """
+
+import asyncio
+import logging
+
+from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    """Run an async coroutine from a sync Celery task."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+@celery_app.task(
+    bind=True, max_retries=2, name="app.tasks.analyze.compute_all_differential_expression"
+)
+def compute_all_differential_expression(self, cancer_type_id=None):
+    """Run differential expression analysis for all (or one) cancer types.
+
+    Processes one cancer type at a time. Checkpoints after each.
+    Runtime: ~30-60 minutes for all 33 cancer types.
+    """
+    logger.info(
+        "Starting differential expression computation (cancer_type_id=%s)",
+        cancer_type_id,
+    )
+    try:
+
+        async def _compute():
+            from sqlalchemy import select
+
+            from app.database import async_session_factory
+            from app.models.cancer_type import CancerType
+            from app.services.expression_analyzer import ExpressionAnalyzer
+
+            analyzer = ExpressionAnalyzer()
+            results = {}
+
+            async with async_session_factory() as session:
+                if cancer_type_id:
+                    cancer_ids = [cancer_type_id]
+                else:
+                    result = await session.execute(
+                        select(CancerType.id, CancerType.tcga_code)
+                    )
+                    cancer_ids = [(row.id, row.tcga_code) for row in result]
+
+                total = len(cancer_ids)
+                for i, item in enumerate(cancer_ids):
+                    cid = item if isinstance(item, int) else item[0]
+                    code = item if isinstance(item, int) else item[1]
+                    logger.info(
+                        "Processing cancer type %s (%d/%d)",
+                        code, i + 1, total,
+                    )
+
+                    try:
+                        de_results = await analyzer.compute_differential_expression(
+                            cid, session
+                        )
+                        await session.commit()
+                        results[str(code)] = {
+                            "genes_analyzed": len(de_results),
+                            "significant": sum(
+                                1
+                                for r in de_results
+                                if r.get("significant", False)
+                            ),
+                        }
+                    except Exception as e:
+                        logger.error(
+                            "DE computation failed for %s: %s", code, e
+                        )
+                        await session.rollback()
+                        results[str(code)] = {"error": str(e)}
+
+            return results
+
+        results = _run_async(_compute())
+        total_genes = sum(
+            r.get("genes_analyzed", 0) for r in results.values()
+        )
+        total_sig = sum(
+            r.get("significant", 0) for r in results.values()
+        )
+        logger.info(
+            "DE computation complete: %d cancer types, %d genes, %d significant",
+            len(results),
+            total_genes,
+            total_sig,
+        )
+        return {
+            "records_processed": total_genes,
+            "errors_count": sum(
+                1 for r in results.values() if "error" in r
+            ),
+            "cancer_type_results": results,
+        }
+
+    except Exception as exc:
+        logger.error("Differential expression computation failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True, max_retries=2, name="app.tasks.analyze.compute_drug_expression_scores"
+)
+def compute_drug_expression_scores(self, cancer_type_id=None):
+    """Score all drug-cancer pairs on expression compatibility.
+
+    If cancer_type_id provided, score all drugs for that cancer.
+    Otherwise, score all drug-cancer pairs with existing hypotheses.
+
+    Stores pre-computed scores in expression_score_cache table.
+    """
+    logger.info(
+        "Starting drug expression scoring (cancer_type_id=%s)", cancer_type_id
+    )
+    try:
+
+        async def _compute():
+            from sqlalchemy import select
+
+            from app.database import async_session_factory
+            from app.models.cancer_type import CancerType
+            from app.models.drug import Drug
+            from app.services.expression_analyzer import ExpressionAnalyzer
+
+            analyzer = ExpressionAnalyzer()
+            scored = 0
+            errors = 0
+
+            async with async_session_factory() as session:
+                # Get cancer types to process
+                if cancer_type_id:
+                    cancer_ids = [cancer_type_id]
+                else:
+                    result = await session.execute(select(CancerType.id))
+                    cancer_ids = [row[0] for row in result]
+
+                # Get all drugs
+                drug_result = await session.execute(select(Drug.id))
+                drug_ids = [row[0] for row in drug_result]
+
+                total_pairs = len(cancer_ids) * len(drug_ids)
+                logger.info(
+                    "Scoring %d drug-cancer pairs (%d drugs x %d cancers)",
+                    total_pairs,
+                    len(drug_ids),
+                    len(cancer_ids),
+                )
+
+                for cid in cancer_ids:
+                    for did in drug_ids:
+                        try:
+                            await analyzer.score_target_expression(
+                                did, cid, session
+                            )
+                            scored += 1
+                            if scored % 500 == 0:
+                                await session.commit()
+                                logger.info(
+                                    "Scored %d/%d pairs", scored, total_pairs
+                                )
+                        except Exception as e:
+                            errors += 1
+                            logger.debug(
+                                "Failed scoring drug=%d cancer=%d: %s",
+                                did, cid, e,
+                            )
+
+                await session.commit()
+
+            return {"scored": scored, "errors": errors}
+
+        result = _run_async(_compute())
+        logger.info(
+            "Drug expression scoring complete: %d scored, %d errors",
+            result["scored"],
+            result["errors"],
+        )
+        return {
+            "records_processed": result["scored"],
+            "errors_count": result["errors"],
+        }
+
+    except Exception as exc:
+        logger.error("Drug expression scoring failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True, max_retries=2, name="app.tasks.analyze.compute_pathway_activities"
+)
+def compute_pathway_activities(self, cancer_type_id=None):
+    """Compute pathway activity scores for all pathway-cancer combinations.
+
+    ~2,340 pathways x 33 cancer types = ~77,000 computations.
+    Results cached in expression_score_cache with 7-day TTL.
+    """
+    logger.info(
+        "Starting pathway activity computation (cancer_type_id=%s)",
+        cancer_type_id,
+    )
+    try:
+
+        async def _compute():
+            from sqlalchemy import select
+
+            from app.database import async_session_factory
+            from app.models.cancer_type import CancerType
+            from app.models.pathway import Pathway
+            from app.services.expression_analyzer import ExpressionAnalyzer
+
+            analyzer = ExpressionAnalyzer()
+            computed = 0
+            errors = 0
+
+            async with async_session_factory() as session:
+                # Get cancer types
+                if cancer_type_id:
+                    cancer_ids = [cancer_type_id]
+                else:
+                    result = await session.execute(select(CancerType.id))
+                    cancer_ids = [row[0] for row in result]
+
+                # Get all pathways
+                pathway_result = await session.execute(select(Pathway.id))
+                pathway_ids = [row[0] for row in pathway_result]
+
+                total = len(cancer_ids) * len(pathway_ids)
+                logger.info(
+                    "Computing %d pathway-cancer activities (%d pathways x %d cancers)",
+                    total,
+                    len(pathway_ids),
+                    len(cancer_ids),
+                )
+
+                for cid in cancer_ids:
+                    for pid in pathway_ids:
+                        try:
+                            await analyzer.compute_pathway_activity(
+                                cid, pid, session
+                            )
+                            computed += 1
+                            if computed % 1000 == 0:
+                                await session.commit()
+                                logger.info(
+                                    "Computed %d/%d activities",
+                                    computed, total,
+                                )
+                        except Exception as e:
+                            errors += 1
+                            logger.debug(
+                                "Failed pathway=%d cancer=%d: %s",
+                                pid, cid, e,
+                            )
+
+                await session.commit()
+
+            return {"computed": computed, "errors": errors}
+
+        result = _run_async(_compute())
+        logger.info(
+            "Pathway activity computation complete: %d computed, %d errors",
+            result["computed"],
+            result["errors"],
+        )
+        return {
+            "records_processed": result["computed"],
+            "errors_count": result["errors"],
+        }
+
+    except Exception as exc:
+        logger.error("Pathway activity computation failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(name="app.tasks.analyze.run_full_expression_analysis")
+def run_full_expression_analysis(cancer_type_id=None):
+    """Run the complete expression analysis pipeline:
+
+    1. Differential expression for all cancer types
+    2. Drug expression scores for all drug-cancer pairs
+    3. Pathway activity scores for all pathway-cancer combinations
+
+    This is the main "analysis" trigger that prepares all expression
+    data needed by the hypothesis engine.
+    """
+    logger.info("Starting full expression analysis pipeline")
+
+    # Step 1: Differential expression
+    de_result = compute_all_differential_expression.apply(
+        kwargs={"cancer_type_id": cancer_type_id}
+    )
+    de_result.get(timeout=7200)  # 2h timeout
+
+    # Step 2: Drug expression scores
+    drug_result = compute_drug_expression_scores.apply(
+        kwargs={"cancer_type_id": cancer_type_id}
+    )
+    drug_result.get(timeout=14400)  # 4h timeout
+
+    # Step 3: Pathway activities
+    pathway_result = compute_pathway_activities.apply(
+        kwargs={"cancer_type_id": cancer_type_id}
+    )
+    pathway_result.get(timeout=14400)  # 4h timeout
+
+    return {
+        "status": "completed",
+        "de_task_id": de_result.id,
+        "drug_scoring_task_id": drug_result.id,
+        "pathway_activity_task_id": pathway_result.id,
+    }

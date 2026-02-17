@@ -15,6 +15,8 @@ VALID_SOURCES = {
     "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
     "literature", "clinical_trials", "embeddings", "literature_analysis",
     "all_literature", "knowledge_graph",
+    "differential_expression", "expression_scores", "pathway_activity",
+    "full_expression_analysis",
 }
 
 
@@ -25,6 +27,7 @@ class IngestionRequest(BaseModel):
     phase: str | None = None  # For literature ingestion: "phase1", "phase2", "phase3", or "all"
     pmid_list: list[str] | None = None  # For literature_analysis
     limit: int | None = None  # For literature_analysis batch size
+    cancer_type_id: int | None = None  # For expression analysis tasks
 
 
 @router.post("/start")
@@ -62,6 +65,10 @@ async def start_ingestion(request: IngestionRequest):
         "literature_analysis": "app.tasks.ingest.analyze_literature_batch",
         "all_literature": "app.tasks.ingest.ingest_all_literature",
         "knowledge_graph": "app.tasks.ingest.sync_knowledge_graph",
+        "differential_expression": "app.tasks.analyze.compute_all_differential_expression",
+        "expression_scores": "app.tasks.analyze.compute_drug_expression_scores",
+        "pathway_activity": "app.tasks.analyze.compute_pathway_activities",
+        "full_expression_analysis": "app.tasks.analyze.run_full_expression_analysis",
     }
 
     task_name = task_map[source]
@@ -77,6 +84,11 @@ async def start_ingestion(request: IngestionRequest):
             kwargs["pmid_list"] = request.pmid_list
         if request.limit:
             kwargs["limit"] = request.limit
+    if source in (
+        "differential_expression", "expression_scores",
+        "pathway_activity", "full_expression_analysis",
+    ) and request.cancer_type_id:
+        kwargs["cancer_type_id"] = request.cancer_type_id
 
     task = celery_app.send_task(task_name, kwargs=kwargs)
     return {"task_id": task.id, "status": "queued", "source": source}

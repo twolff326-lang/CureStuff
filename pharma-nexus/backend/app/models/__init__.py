@@ -8,6 +8,7 @@ from app.models.evidence import Bioassay, GeneExpression
 from app.models.literature import Literature, LiteratureTarget, LiteratureCancer
 from app.models.clinical_trial import ClinicalTrial
 from app.models.ingestion_log import IngestionLog
+from app.models.expression_cache import ExpressionScoreCache
 
 __all__ = [
     "Drug",
@@ -30,4 +31,5 @@ __all__ = [
     "ClinicalTrial",
     "TrialDrug",
     "IngestionLog",
+    "ExpressionScoreCache",
 ]
