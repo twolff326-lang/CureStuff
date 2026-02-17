@@ -35,6 +35,12 @@ class Settings(BaseSettings):
 
     # Claude API
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    llm_cost_mode: str = Field(
+        default="economy",
+        alias="LLM_COST_MODE",
+        description="LLM cost tier: economy (Haiku-only, confidence-only), "
+        "standard (Sonnet bulk + Opus top), premium (Opus everything)",
+    )
 
     # NCBI / PubMed
     ncbi_api_key: str = Field(default="", alias="NCBI_API_KEY")

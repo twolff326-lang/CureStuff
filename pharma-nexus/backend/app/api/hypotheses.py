@@ -44,6 +44,12 @@ class RescoreRequest(BaseModel):
     preset_name: str | None = None
 
 
+class ConfidenceBatchRequest(BaseModel):
+    min_score: float = 0.0
+    limit: int = 200
+    cost_mode: str | None = None  # override settings.llm_cost_mode
+
+
 class WeightPresetRequest(BaseModel):
     name: str
     weights: dict[str, float]
@@ -308,6 +314,94 @@ async def trigger_rescore(request: RescoreRequest | None = None):
         kwargs={"preset_name": preset_name},
     )
     return {"task_id": task.id, "status": "queued", "preset_name": preset_name}
+
+
+@router.post("/analyze/confidence")
+async def trigger_confidence_batch(
+    request: ConfidenceBatchRequest | None = None,
+):
+    """Run confidence-only LLM assessment — the cheapest way to activate
+    the feedback loop.
+
+    In economy mode (~$0.01/hypothesis with Haiku), this gives you the
+    full adjusted-score ranking without paying for narrative, critique,
+    comparative, literature_synthesis, or experiment_design analyses.
+
+    Cost comparison for 100 hypotheses:
+      economy  (Haiku, confidence-only):  ~$1.30
+      standard (Sonnet/Opus, full suite): ~$42
+      premium  (Opus, full suite):        ~$90
+    """
+    min_score = request.min_score if request else 0.0
+    limit = request.limit if request else 200
+    cost_mode = request.cost_mode if request else None
+    task = celery_app.send_task(
+        "app.tasks.generate.run_confidence_batch",
+        kwargs={
+            "min_score": min_score,
+            "limit": limit,
+            "cost_mode": cost_mode,
+        },
+    )
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "cost_mode": cost_mode or "from settings",
+        "min_score": min_score,
+        "limit": limit,
+    }
+
+
+@router.get("/analyze/cost-info")
+async def get_cost_info():
+    """Show current LLM cost mode and per-hypothesis cost estimates."""
+    from app.config import settings as app_settings
+    from app.services.llm_analyst import COST_MODE_MODELS, PRICING
+
+    mode = app_settings.llm_cost_mode
+    models = COST_MODE_MODELS.get(mode, COST_MODE_MODELS["standard"])
+
+    # Estimate per-hypothesis costs (rough: ~3K input, ~2K output tokens per call)
+    est_input, est_output = 3000, 2000
+
+    def _est_cost(model: str, calls: int) -> float:
+        p = PRICING[model]
+        return round((est_input * p["input"] + est_output * p["output"]) / 1_000_000 * calls, 4)
+
+    return {
+        "current_cost_mode": mode,
+        "models": models,
+        "per_hypothesis_estimates": {
+            "confidence_only": {
+                "calls": 1,
+                "model": models["default"],
+                "estimated_cost_usd": _est_cost(models["default"], 1),
+            },
+            "full_analysis": {
+                "calls": 6,
+                "model_mix": f"{models['default']} (bulk) + {models['top']} (top)",
+                "estimated_cost_usd": _est_cost(models["default"], 6),
+            },
+        },
+        "batch_100_estimates": {
+            "confidence_only": _est_cost(models["default"], 100),
+            "full_analysis": _est_cost(models["default"], 600),
+        },
+        "available_modes": {
+            "economy": {
+                "models": COST_MODE_MODELS["economy"],
+                "confidence_only_100": _est_cost(COST_MODE_MODELS["economy"]["default"], 100),
+            },
+            "standard": {
+                "models": COST_MODE_MODELS["standard"],
+                "confidence_only_100": _est_cost(COST_MODE_MODELS["standard"]["default"], 100),
+            },
+            "premium": {
+                "models": COST_MODE_MODELS["premium"],
+                "confidence_only_100": _est_cost(COST_MODE_MODELS["premium"]["default"], 100),
+            },
+        },
+    }
 
 
 @router.get("/status/{task_id}")

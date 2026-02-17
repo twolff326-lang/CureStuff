@@ -42,14 +42,26 @@ from app.services.pathway_analyzer import PathwayAnalyzer
 
 logger = logging.getLogger(__name__)
 
+MODEL_HAIKU = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-20250514"
 MODEL_OPUS = "claude-opus-4-20250514"
 TOP_HYPOTHESIS_THRESHOLD = 70
 
 # Pricing per 1M tokens (USD)
 PRICING = {
+    MODEL_HAIKU: {"input": 1.0, "output": 5.0},
     MODEL_SONNET: {"input": 3.0, "output": 15.0},
     MODEL_OPUS: {"input": 15.0, "output": 75.0},
+}
+
+# Cost mode → model selection strategy
+# economy:  Haiku everywhere (cheapest — ~$0.01/hypothesis for confidence-only)
+# standard: Sonnet bulk + Opus for top hypotheses (original default)
+# premium:  Opus everywhere (highest quality)
+COST_MODE_MODELS = {
+    "economy": {"default": MODEL_HAIKU, "top": MODEL_HAIKU},
+    "standard": {"default": MODEL_SONNET, "top": MODEL_OPUS},
+    "premium": {"default": MODEL_OPUS, "top": MODEL_OPUS},
 }
 
 ANALYSIS_TYPES = [
@@ -92,16 +104,19 @@ class LLMAnalyst:
     from the database and sending them to Claude with specialized prompts.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cost_mode: str | None = None) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self._concurrent_sem = asyncio.Semaphore(5)
         self._rate_limiter = RateLimiter(max_per_minute=50)
+        self._cost_mode = cost_mode or settings.llm_cost_mode
 
     def _select_model(self, hypothesis: Hypothesis) -> str:
-        """Use Opus for top-scoring hypotheses, Sonnet for the rest."""
+        """Select model based on cost mode and hypothesis score."""
+        mode = self._cost_mode
+        models = COST_MODE_MODELS.get(mode, COST_MODE_MODELS["standard"])
         if hypothesis.composite_score >= TOP_HYPOTHESIS_THRESHOLD:
-            return MODEL_OPUS
-        return MODEL_SONNET
+            return models["top"]
+        return models["default"]
 
     # ------------------------------------------------------------------
     # Core Claude API call with rate limiting and retry
@@ -1165,6 +1180,56 @@ class LLMAnalyst:
                 "confidence": confidence_result,
             },
         }
+
+    async def assess_confidence_batch(
+        self,
+        session: AsyncSession,
+        min_score: float = 0.0,
+        limit: int = 200,
+    ) -> dict:
+        """Run ONLY the confidence assessment for hypotheses — the cheapest
+        way to get the feedback loop working.
+
+        In economy mode with Haiku, this costs ~$0.01 per hypothesis vs
+        ~$0.42 for a full 6-analysis run with Opus/Sonnet.
+
+        Skips hypotheses that already have an llm_confidence_score.
+        """
+        result = await session.execute(
+            select(Hypothesis.id)
+            .where(
+                Hypothesis.composite_score >= min_score,
+                Hypothesis.llm_confidence_score.is_(None),
+            )
+            .order_by(Hypothesis.composite_score.desc())
+            .limit(limit)
+        )
+        hypothesis_ids = [r[0] for r in result.all()]
+
+        logger.info(
+            "Running confidence-only assessment for %d hypotheses "
+            "(cost_mode=%s, min_score=%.1f)",
+            len(hypothesis_ids),
+            self._cost_mode,
+            min_score,
+        )
+
+        results = {"total": len(hypothesis_ids), "completed": 0, "errors": [], "cost_mode": self._cost_mode}
+        for hyp_id in hypothesis_ids:
+            try:
+                await self.assess_confidence(hyp_id, session)
+                results["completed"] += 1
+                if results["completed"] % 10 == 0:
+                    await session.commit()
+                    logger.info(
+                        "Confidence assessed: %d/%d", results["completed"], len(hypothesis_ids)
+                    )
+            except Exception as e:
+                logger.error("Confidence assessment failed for hypothesis %d: %s", hyp_id, e)
+                results["errors"].append({"hypothesis_id": hyp_id, "error": str(e)})
+
+        await session.commit()
+        return results
 
     async def generate_narratives_batch(
         self,

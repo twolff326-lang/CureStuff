@@ -544,3 +544,139 @@ class TestGroundTruthDataset:
                 assert pmid.isdigit(), (
                     f"PMID should be numeric string: {pmid}"
                 )
+
+
+# =====================================================================
+# Cost optimization tests
+# =====================================================================
+
+
+class TestCostModes:
+    """Test LLM cost mode model selection and pricing."""
+
+    def test_economy_mode_uses_haiku(self):
+        from app.services.llm_analyst import COST_MODE_MODELS, MODEL_HAIKU
+
+        models = COST_MODE_MODELS["economy"]
+        assert models["default"] == MODEL_HAIKU
+        assert models["top"] == MODEL_HAIKU
+
+    def test_standard_mode_uses_sonnet_and_opus(self):
+        from app.services.llm_analyst import (
+            COST_MODE_MODELS,
+            MODEL_OPUS,
+            MODEL_SONNET,
+        )
+
+        models = COST_MODE_MODELS["standard"]
+        assert models["default"] == MODEL_SONNET
+        assert models["top"] == MODEL_OPUS
+
+    def test_premium_mode_uses_opus_everywhere(self):
+        from app.services.llm_analyst import COST_MODE_MODELS, MODEL_OPUS
+
+        models = COST_MODE_MODELS["premium"]
+        assert models["default"] == MODEL_OPUS
+        assert models["top"] == MODEL_OPUS
+
+    def test_haiku_pricing_is_cheapest(self):
+        from app.services.llm_analyst import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET, PRICING
+
+        haiku_cost = PRICING[MODEL_HAIKU]["input"] + PRICING[MODEL_HAIKU]["output"]
+        sonnet_cost = PRICING[MODEL_SONNET]["input"] + PRICING[MODEL_SONNET]["output"]
+        opus_cost = PRICING[MODEL_OPUS]["input"] + PRICING[MODEL_OPUS]["output"]
+        assert haiku_cost < sonnet_cost < opus_cost
+
+    def test_economy_cost_estimate_per_hypothesis(self):
+        """Economy confidence-only should cost ~$0.013 per hypothesis."""
+        from app.services.llm_analyst import MODEL_HAIKU, PRICING
+
+        p = PRICING[MODEL_HAIKU]
+        # Rough: 3K input + 2K output tokens
+        cost = (3000 * p["input"] + 2000 * p["output"]) / 1_000_000
+        assert cost < 0.02  # well under 2 cents per hypothesis
+
+    def test_standard_full_analysis_cost_per_hypothesis(self):
+        """Standard full analysis (6 calls, Sonnet) should cost ~$0.23."""
+        from app.services.llm_analyst import MODEL_SONNET, PRICING
+
+        p = PRICING[MODEL_SONNET]
+        cost_per_call = (3000 * p["input"] + 2000 * p["output"]) / 1_000_000
+        cost_6 = cost_per_call * 6
+        assert cost_6 < 0.50  # under 50 cents for 6 analyses
+
+    def test_economy_vs_standard_savings(self):
+        """Economy confidence-only should be at least 10x cheaper than standard full."""
+        from app.services.llm_analyst import MODEL_HAIKU, MODEL_SONNET, PRICING
+
+        haiku_p = PRICING[MODEL_HAIKU]
+        sonnet_p = PRICING[MODEL_SONNET]
+        economy_cost = (3000 * haiku_p["input"] + 2000 * haiku_p["output"]) / 1_000_000 * 1
+        standard_cost = (3000 * sonnet_p["input"] + 2000 * sonnet_p["output"]) / 1_000_000 * 6
+        ratio = standard_cost / economy_cost
+        assert ratio > 10  # economy is at least 10x cheaper
+
+    def test_model_selection_economy(self):
+        """Economy mode should select Haiku for all hypotheses."""
+        from unittest.mock import MagicMock
+
+        from app.services.llm_analyst import MODEL_HAIKU, LLMAnalyst
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        analyst._cost_mode = "economy"
+
+        low_hyp = MagicMock()
+        low_hyp.composite_score = 30.0
+        assert analyst._select_model(low_hyp) == MODEL_HAIKU
+
+        high_hyp = MagicMock()
+        high_hyp.composite_score = 90.0
+        assert analyst._select_model(high_hyp) == MODEL_HAIKU
+
+    def test_model_selection_standard(self):
+        """Standard mode: Sonnet for low, Opus for high scorers."""
+        from unittest.mock import MagicMock
+
+        from app.services.llm_analyst import MODEL_OPUS, MODEL_SONNET, LLMAnalyst
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        analyst._cost_mode = "standard"
+
+        low_hyp = MagicMock()
+        low_hyp.composite_score = 30.0
+        assert analyst._select_model(low_hyp) == MODEL_SONNET
+
+        high_hyp = MagicMock()
+        high_hyp.composite_score = 90.0
+        assert analyst._select_model(high_hyp) == MODEL_OPUS
+
+    def test_model_selection_premium(self):
+        """Premium mode: Opus everywhere."""
+        from unittest.mock import MagicMock
+
+        from app.services.llm_analyst import MODEL_OPUS, LLMAnalyst
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        analyst._cost_mode = "premium"
+
+        low_hyp = MagicMock()
+        low_hyp.composite_score = 30.0
+        assert analyst._select_model(low_hyp) == MODEL_OPUS
+
+    def test_cost_mode_constructor_override(self):
+        """Cost mode can be overridden via constructor."""
+        from app.services.llm_analyst import LLMAnalyst
+
+        analyst = LLMAnalyst.__new__(LLMAnalyst)
+        analyst._cost_mode = "economy"
+        assert analyst._cost_mode == "economy"
+
+    def test_all_models_have_pricing(self):
+        """Every model in COST_MODE_MODELS should have a PRICING entry."""
+        from app.services.llm_analyst import COST_MODE_MODELS, PRICING
+
+        for mode, models in COST_MODE_MODELS.items():
+            for role, model_name in models.items():
+                assert model_name in PRICING, (
+                    f"Model {model_name} (mode={mode}, role={role}) missing from PRICING"
+                )

@@ -1,10 +1,11 @@
-"""Celery tasks for hypothesis generation and rescoring.
+"""Celery tasks for hypothesis generation, rescoring, and LLM analysis.
 
 Tasks:
   - generate_hypotheses_for_cancer: Generate hypotheses for one cancer type
   - generate_hypotheses_for_drug: Generate hypotheses for one drug
   - generate_all_hypotheses: Generate hypotheses for all cancer types
   - rescore_hypotheses: Rescore all hypotheses with current/new weights
+  - run_confidence_batch: Run confidence-only LLM assessment (cheapest feedback loop)
 """
 
 import asyncio
@@ -283,4 +284,47 @@ def rescore_hypotheses(self, preset_name=None):
 
     except Exception as exc:
         logger.error("Hypothesis rescoring failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.tasks.generate.run_confidence_batch",
+)
+def run_confidence_batch(self, min_score=0.0, limit=200, cost_mode=None):
+    """Run confidence-only LLM assessment for hypotheses without one.
+
+    This is the cheapest way to activate the feedback loop.
+    In economy mode with Haiku: ~$0.01 per hypothesis.
+    """
+    logger.info(
+        "Starting confidence batch (min_score=%.1f, limit=%d, cost_mode=%s)",
+        min_score,
+        limit,
+        cost_mode or "from settings",
+    )
+    try:
+
+        async def _assess():
+            from app.database import async_session_factory
+            from app.services.llm_analyst import LLMAnalyst
+
+            analyst = LLMAnalyst(cost_mode=cost_mode)
+            async with async_session_factory() as session:
+                return await analyst.assess_confidence_batch(
+                    session, min_score=min_score, limit=limit
+                )
+
+        result = _run_async(_assess())
+        logger.info(
+            "Confidence batch complete: %d/%d assessed (cost_mode=%s)",
+            result["completed"],
+            result["total"],
+            result["cost_mode"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("Confidence batch failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
