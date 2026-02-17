@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    @page {
+        size: letter;
+        margin: 1in 0.75in;
+        @bottom-center {
+            content: "Pharma Nexus — Executive Summary — Page " counter(page) " of " counter(pages);
+            font-size: 8pt;
+            color: #666;
+        }
+    }
+
+    body {
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 1.5;
+        color: #222;
+    }
+
+    h1 { font-size: 22pt; color: #1a365d; margin-bottom: 5pt; page-break-after: avoid; }
+    h2 { font-size: 14pt; color: #2c5282; border-bottom: 2px solid #bee3f8; padding-bottom: 4pt; margin-top: 20pt; page-break-after: avoid; }
+    h3 { font-size: 11pt; color: #2d3748; margin-top: 14pt; page-break-after: avoid; }
+
+    .header {
+        text-align: center;
+        border-bottom: 3pt solid #1a365d;
+        padding-bottom: 15pt;
+        margin-bottom: 20pt;
+    }
+    .header h1 { font-size: 28pt; margin-bottom: 5pt; }
+    .header .subtitle { font-size: 12pt; color: #718096; }
+
+    .stat-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10pt;
+        margin: 15pt 0;
+    }
+    .stat-box {
+        flex: 1;
+        min-width: 100pt;
+        text-align: center;
+        padding: 12pt 8pt;
+        border: 1px solid #e2e8f0;
+        border-radius: 8pt;
+        background-color: #f7fafc;
+    }
+    .stat-value { font-size: 24pt; font-weight: bold; color: #1a365d; }
+    .stat-label { font-size: 8pt; color: #718096; text-transform: uppercase; letter-spacing: 0.5pt; }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10pt 0;
+        font-size: 9pt;
+    }
+    th {
+        background-color: #edf2f7;
+        padding: 6pt 8pt;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid #cbd5e0;
+    }
+    td {
+        padding: 5pt 8pt;
+        border-bottom: 1px solid #e2e8f0;
+        vertical-align: top;
+    }
+    tr:nth-child(even) { background-color: #f7fafc; }
+
+    .evidence-strong { color: #38a169; font-weight: bold; }
+    .evidence-moderate { color: #d69e2e; }
+    .evidence-weak { color: #e53e3e; }
+    .evidence-speculative { color: #a0aec0; }
+
+    .strength-bar {
+        display: inline-block;
+        height: 12pt;
+        border-radius: 2pt;
+        margin-right: 2pt;
+    }
+    .bar-strong { background-color: #38a169; }
+    .bar-moderate { background-color: #d69e2e; }
+    .bar-weak { background-color: #e53e3e; }
+    .bar-speculative { background-color: #a0aec0; }
+
+    .recommendation-box {
+        background-color: #ebf8ff;
+        padding: 12pt;
+        border-left: 4pt solid #3182ce;
+        margin: 8pt 0;
+        border-radius: 0 4pt 4pt 0;
+    }
+
+    .metadata { font-size: 8pt; color: #a0aec0; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+    <h1>Pharma Nexus</h1>
+    <div class="subtitle">Executive Summary &mdash; Drug Repurposing Discovery Engine</div>
+    <p style="color: #718096; font-size: 10pt;">{{ report_date }}</p>
+</div>
+
+<!-- SYSTEM OVERVIEW -->
+<h2>System Overview</h2>
+<p>
+    Pharma Nexus is an AI-powered drug repurposing discovery engine that integrates data from
+    13 public biomedical databases to identify potential new uses for existing drugs against
+    cancer. The system generates hypotheses by analyzing pathway overlap, gene expression
+    patterns, literature evidence, clinical trial data, safety profiles, and novelty across
+    all drug-cancer combinations, then uses Claude (Anthropic) to produce expert-level
+    mechanistic narratives and critical assessments.
+</p>
+
+<!-- KEY NUMBERS -->
+<h2>Data Overview</h2>
+<div class="stat-grid">
+    <div class="stat-box">
+        <div class="stat-value">{{ stats.total_drugs }}</div>
+        <div class="stat-label">Drugs</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{{ stats.total_cancers }}</div>
+        <div class="stat-label">Cancer Types</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{{ stats.total_hypotheses }}</div>
+        <div class="stat-label">Hypotheses</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{{ stats.total_papers }}</div>
+        <div class="stat-label">Papers</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-value">{{ stats.total_trials }}</div>
+        <div class="stat-label">Clinical Trials</div>
+    </div>
+</div>
+
+<p><strong>Data Sources:</strong> DrugBank, PubChem, ChEMBL (drugs &amp; targets); TCGA/cBioPortal,
+COSMIC (cancer genomics); KEGG, Reactome (pathways); STRING, UniProt (proteins); OpenTargets
+(disease associations); PubMed (literature); ClinicalTrials.gov (trials); GEO (expression).</p>
+
+<!-- HYPOTHESIS STRENGTH BREAKDOWN -->
+<h2>Hypothesis Quality Distribution</h2>
+<table>
+    <tr><th>Evidence Strength</th><th>Count</th><th></th></tr>
+    <tr>
+        <td class="evidence-strong">Strong</td>
+        <td>{{ strength_counts.strong }}</td>
+        <td><span class="strength-bar bar-strong" style="width: {{ [strength_counts.strong, 200] | min }}pt;">&nbsp;</span></td>
+    </tr>
+    <tr>
+        <td class="evidence-moderate">Moderate</td>
+        <td>{{ strength_counts.moderate }}</td>
+        <td><span class="strength-bar bar-moderate" style="width: {{ [strength_counts.moderate, 200] | min }}pt;">&nbsp;</span></td>
+    </tr>
+    <tr>
+        <td class="evidence-weak">Weak</td>
+        <td>{{ strength_counts.weak }}</td>
+        <td><span class="strength-bar bar-weak" style="width: {{ [strength_counts.weak, 200] | min }}pt;">&nbsp;</span></td>
+    </tr>
+    <tr>
+        <td class="evidence-speculative">Speculative</td>
+        <td>{{ strength_counts.speculative }}</td>
+        <td><span class="strength-bar bar-speculative" style="width: {{ [strength_counts.speculative, 200] | min }}pt;">&nbsp;</span></td>
+    </tr>
+</table>
+
+<!-- TOP 10 HYPOTHESES -->
+<h2>Top 10 Hypotheses by Composite Score</h2>
+<table>
+    <tr><th>#</th><th>Drug</th><th>Cancer</th><th>Score</th><th>Strength</th><th>Novelty</th></tr>
+    {% for h in top_10 %}
+    <tr>
+        <td>{{ loop.index }}</td>
+        <td><strong>{{ h.drug }}</strong></td>
+        <td>{{ h.cancer }}</td>
+        <td><strong>{{ h.score }}</strong></td>
+        <td class="evidence-{{ h.strength }}">{{ h.strength }}</td>
+        <td>{{ h.novelty }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<!-- TOP 10 NOVEL DISCOVERIES -->
+{% if novel_10 %}
+<h2>Top 10 Novel Discoveries</h2>
+<p>Hypotheses with high novelty (&ge;60) and strong evidence (&ge;45 composite score).</p>
+<table>
+    <tr><th>#</th><th>Drug</th><th>Cancer</th><th>Score</th><th>Novelty</th><th>Summary</th></tr>
+    {% for h in novel_10 %}
+    <tr>
+        <td>{{ loop.index }}</td>
+        <td><strong>{{ h.drug }}</strong></td>
+        <td>{{ h.cancer }}</td>
+        <td><strong>{{ h.score }}</strong></td>
+        <td>{{ h.novelty }}</td>
+        <td style="font-size: 8pt;">{{ h.summary[:150] }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+
+<!-- MOST PROMISING CANCER TYPES -->
+{% if top_cancer_types %}
+<h2>Most Promising Cancer Types</h2>
+<p>Cancer types with the most strong or moderate evidence hypotheses.</p>
+<table>
+    <tr><th>#</th><th>Cancer Type</th><th>TCGA</th><th>Actionable Hypotheses</th></tr>
+    {% for c in top_cancer_types %}
+    <tr>
+        <td>{{ loop.index }}</td>
+        <td><strong>{{ c.name }}</strong></td>
+        <td>{{ c.tcga }}</td>
+        <td>{{ c.count }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+
+<!-- RECOMMENDATIONS -->
+<h2>Recommended Next Steps</h2>
+<div class="recommendation-box">
+    <strong>1. Deep-dive top candidates:</strong> Generate full analysis packages (mechanistic
+    narrative, critique, experiment design, confidence assessment) for the top 20 hypotheses
+    if not already generated.
+</div>
+<div class="recommendation-box">
+    <strong>2. Prioritize novel discoveries:</strong> Focus validation efforts on high-novelty
+    hypotheses that represent genuinely new therapeutic connections rather than rediscoveries
+    of known associations.
+</div>
+<div class="recommendation-box">
+    <strong>3. Expert review:</strong> Share individual hypothesis reports with domain experts
+    in the relevant cancer types for clinical feasibility assessment.
+</div>
+<div class="recommendation-box">
+    <strong>4. Experimental validation:</strong> For the strongest candidates, follow the
+    AI-suggested experiment designs starting with in-vitro cell viability assays as a
+    low-cost initial screen.
+</div>
+
+<div class="metadata" style="margin-top: 30pt; border-top: 1pt solid #e2e8f0; padding-top: 10pt;">
+    Report generated: {{ report_date }} | Pharma Nexus v1.0 | AI-Powered Drug Repurposing Discovery Engine
+</div>
+
+</body>
+</html>

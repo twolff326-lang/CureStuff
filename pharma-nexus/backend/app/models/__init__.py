@@ -11,6 +11,7 @@ from app.models.ingestion_log import IngestionLog
 from app.models.expression_cache import ExpressionScoreCache
 from app.models.scoring_config import ScoringWeight
 from app.models.llm_analysis import HypothesisAnalysis, LLMUsageLog
+from app.models.report_cache import ReportCache
 
 __all__ = [
     "Drug",
@@ -37,4 +38,5 @@ __all__ = [
     "ScoringWeight",
     "HypothesisAnalysis",
     "LLMUsageLog",
+    "ReportCache",
 ]

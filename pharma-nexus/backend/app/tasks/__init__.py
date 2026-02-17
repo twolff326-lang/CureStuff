@@ -15,6 +15,13 @@ from app.tasks.ingest import (
     ingest_opentargets,
     ingest_all_pathways,
 )
+from app.tasks.reports import (
+    generate_hypothesis_report_task,
+    generate_cancer_summary_task,
+    generate_novel_discoveries_task,
+    generate_executive_summary_task,
+    generate_all_reports,
+)
 
 __all__ = [
     "celery_app",
@@ -32,4 +39,9 @@ __all__ = [
     "ingest_uniprot",
     "ingest_opentargets",
     "ingest_all_pathways",
+    "generate_hypothesis_report_task",
+    "generate_cancer_summary_task",
+    "generate_novel_discoveries_task",
+    "generate_executive_summary_task",
+    "generate_all_reports",
 ]

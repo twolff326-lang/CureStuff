@@ -21,6 +21,7 @@ celery_app.conf.update(
         "app.tasks.ingest.*": {"queue": "ingestion"},
         "app.tasks.analyze.*": {"queue": "analysis"},
         "app.tasks.generate.*": {"queue": "generation"},
+        "app.tasks.reports.*": {"queue": "reports"},
     },
 )
 

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
-    cancer, pathways, literature, clinical_trials, llm_analysis,
+    cancer, pathways, literature, clinical_trials, llm_analysis, reports,
 )
 
 
@@ -53,6 +53,7 @@ app.include_router(clinical_trials.router, tags=["clinical_trials"])
 app.include_router(
     llm_analysis.router, prefix="/api/llm-analysis", tags=["llm-analysis"]
 )
+app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 
 
 @app.get("/health")
