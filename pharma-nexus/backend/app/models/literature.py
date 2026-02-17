@@ -3,6 +3,7 @@ from datetime import datetime, date
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
+    Computed,
     Date,
     DateTime,
     ForeignKey,
@@ -12,7 +13,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -32,6 +33,16 @@ class Literature(Base):
     mesh_terms = Column(JSONB, default=list)
     abstract_embedding = Column(Vector(384))
     relevance_tags = Column(JSONB, default=list)
+    extracted_findings = Column(JSONB, nullable=True)
+    analysis_status = Column(String(20), server_default="pending", nullable=False)
+    search_vector = Column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english', coalesce(title, '')), 'A') || "
+            "setweight(to_tsvector('english', coalesce(abstract, '')), 'B')",
+            persisted=True,
+        ),
+    )
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     # Relationships
@@ -49,6 +60,7 @@ class Literature(Base):
         Index("ix_literature_authors", "authors", postgresql_using="gin"),
         Index("ix_literature_mesh_terms", "mesh_terms", postgresql_using="gin"),
         Index("ix_literature_relevance_tags", "relevance_tags", postgresql_using="gin"),
+        Index("ix_literature_search_vector", "search_vector", postgresql_using="gin"),
     )
 
 

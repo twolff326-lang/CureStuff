@@ -385,3 +385,185 @@ def _pathway_phase_complete(results):
     """Callback after KEGG and Reactome ingestion complete."""
     logger.info("Pathway ingestion phase complete. Results: %s", results)
     return {"status": "completed", "source_results": results}
+
+
+# ------------------------------------------------------------------
+# Literature mining tasks
+# ------------------------------------------------------------------
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_literature")
+def ingest_literature(self, phase="all"):
+    """Ingest PubMed literature in 3 phases.
+
+    This is a LONG task — potentially 6-12 hours for full ingestion.
+
+    Phase 1: Targeted drug-cancer pairs (~10K papers) — ~1-2 hours
+    Phase 2: Broader drug-cancer literature (~75K papers) — ~3-5 hours
+    Phase 3: Target-focused literature (~20K papers) — ~1-2 hours
+
+    Each phase checkpoints progress. If the task fails and restarts,
+    it skips already-ingested papers (PMID uniqueness constraint).
+    """
+    logger.info("Starting PubMed literature ingestion (phase=%s)", phase)
+    try:
+        from app.services.ingestion.pubmed import PubMedConnector
+
+        result = _run_async(_run_connector(PubMedConnector, phase=phase))
+        logger.info(
+            "PubMed ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("PubMed ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_clinical_trials")
+def ingest_clinical_trials(self):
+    """Fetch clinical trial data from ClinicalTrials.gov for all drugs."""
+    logger.info("Starting ClinicalTrials.gov ingestion")
+    try:
+        from app.services.ingestion.clinicaltrials import ClinicalTrialsConnector
+
+        result = _run_async(_run_connector(ClinicalTrialsConnector))
+        logger.info(
+            "ClinicalTrials.gov ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("ClinicalTrials.gov ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.generate_embeddings")
+def generate_embeddings(self):
+    """Generate vector embeddings for all un-embedded records.
+
+    Processes:
+    1. Literature abstracts without embeddings (~50-80K)
+    2. Target descriptions without embeddings (~5K)
+    3. Drug mechanisms without embeddings (~2.5K)
+
+    After bulk insertion, creates/refreshes IVFFlat indexes.
+    Runtime: ~15-30 minutes on CPU for all records.
+    """
+    logger.info("Starting embedding generation")
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.embedding import EmbeddingService
+
+            svc = EmbeddingService()
+            async with async_session_factory() as session:
+                lit_count = await svc.embed_literature(session)
+                target_count = await svc.embed_targets(session)
+                drug_count = await svc.embed_drugs(session)
+                await svc.create_vector_indexes(session)
+                return {
+                    "literature_embedded": lit_count,
+                    "targets_embedded": target_count,
+                    "drugs_embedded": drug_count,
+                }
+
+        result = _run_async(_generate())
+        logger.info("Embedding generation complete: %s", result)
+        return {"records_processed": sum(result.values()), "errors_count": 0, **result}
+
+    except Exception as exc:
+        logger.error("Embedding generation failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, name="app.tasks.ingest.analyze_literature_batch")
+def analyze_literature_batch(self, pmid_list=None, limit=1000):
+    """Run Claude-based abstract extraction on un-analyzed papers.
+
+    If pmid_list provided, analyze those specific papers.
+    Otherwise, analyze the next {limit} un-analyzed papers, prioritizing:
+    1. Papers linked to drug-cancer pairs (Phase 1 papers)
+    2. Papers mentioning both a drug and cancer
+    3. Remaining papers
+
+    Rate limited to 50 Claude API calls/minute.
+    Stores extracted findings in literature.extracted_findings JSONB column.
+    """
+    logger.info(
+        "Starting literature analysis batch (pmids=%s, limit=%d)",
+        len(pmid_list) if pmid_list else "auto",
+        limit,
+    )
+    try:
+
+        async def _analyze():
+            from app.database import async_session_factory
+            from app.services.literature_analyzer import LiteratureAnalyzer
+
+            analyzer = LiteratureAnalyzer()
+            async with async_session_factory() as session:
+                return await analyzer.analyze_batch(
+                    session, pmid_list=pmid_list, limit=limit
+                )
+
+        result = _run_async(_analyze())
+        logger.info(
+            "Literature analysis complete: %d analyzed, %d failed",
+            result["analyzed"], result["failed"],
+        )
+        return {
+            "records_processed": result["analyzed"],
+            "errors_count": result["failed"],
+            **result,
+        }
+
+    except Exception as exc:
+        logger.error("Literature analysis failed: %s", exc)
+        return {"records_processed": 0, "errors_count": 1, "error": str(exc)}
+
+
+@celery_app.task(name="app.tasks.ingest.ingest_all_literature")
+def ingest_all_literature():
+    """Run full literature pipeline:
+
+    1. PubMed ingestion (all 3 phases)
+    2. ClinicalTrials.gov ingestion
+    3. Embedding generation
+    4. Abstract analysis (top 1000 most relevant papers)
+    """
+    logger.info("Starting full literature ingestion pipeline")
+
+    # Step 1: PubMed literature
+    lit_result = ingest_literature.apply()
+    lit_result.get(timeout=43200)  # 12h timeout
+
+    # Step 2: Clinical trials
+    ct_result = ingest_clinical_trials.apply()
+    ct_result.get(timeout=7200)  # 2h timeout
+
+    # Step 3: Embeddings
+    emb_result = generate_embeddings.apply()
+    emb_result.get(timeout=3600)  # 1h timeout
+
+    # Step 4: Analyze top 1000 papers
+    analysis_result = analyze_literature_batch.apply(kwargs={"limit": 1000})
+    analysis_result.get(timeout=7200)  # 2h timeout
+
+    return {
+        "status": "completed",
+        "literature_task_id": lit_result.id,
+        "clinical_trials_task_id": ct_result.id,
+        "embeddings_task_id": emb_result.id,
+        "analysis_task_id": analysis_result.id,
+    }
+
+
+@celery_app.task(name="app.tasks.ingest.literature_pipeline_complete")
+def _literature_pipeline_complete(results):
+    """Callback after literature pipeline completes."""
+    logger.info("Literature pipeline complete. Results: %s", results)
+    return {"status": "completed", "source_results": results}

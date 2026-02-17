@@ -13,6 +13,8 @@ VALID_SOURCES = {
     "drugbank", "pubchem", "chembl", "all_drugs",
     "cbioportal", "tcga", "cosmic", "all_cancer_data",
     "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
+    "literature", "clinical_trials", "embeddings", "literature_analysis",
+    "all_literature",
 }
 
 
@@ -20,6 +22,9 @@ class IngestionRequest(BaseModel):
     source: str
     xml_path: str | None = None
     census_tsv_path: str | None = None
+    phase: str | None = None  # For literature ingestion: "phase1", "phase2", "phase3", or "all"
+    pmid_list: list[str] | None = None  # For literature_analysis
+    limit: int | None = None  # For literature_analysis batch size
 
 
 @router.post("/start")
@@ -51,6 +56,11 @@ async def start_ingestion(request: IngestionRequest):
         "uniprot": "app.tasks.ingest.ingest_uniprot",
         "opentargets": "app.tasks.ingest.ingest_opentargets",
         "all_pathways": "app.tasks.ingest.ingest_all_pathways",
+        "literature": "app.tasks.ingest.ingest_literature",
+        "clinical_trials": "app.tasks.ingest.ingest_clinical_trials",
+        "embeddings": "app.tasks.ingest.generate_embeddings",
+        "literature_analysis": "app.tasks.ingest.analyze_literature_batch",
+        "all_literature": "app.tasks.ingest.ingest_all_literature",
     }
 
     task_name = task_map[source]
@@ -59,6 +69,13 @@ async def start_ingestion(request: IngestionRequest):
         kwargs["xml_path"] = request.xml_path
     if source in ("cosmic", "all_cancer_data") and request.census_tsv_path:
         kwargs["census_tsv_path"] = request.census_tsv_path
+    if source == "literature" and request.phase:
+        kwargs["phase"] = request.phase
+    if source == "literature_analysis":
+        if request.pmid_list:
+            kwargs["pmid_list"] = request.pmid_list
+        if request.limit:
+            kwargs["limit"] = request.limit
 
     task = celery_app.send_task(task_name, kwargs=kwargs)
     return {"task_id": task.id, "status": "queued", "source": source}

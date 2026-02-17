@@ -37,6 +37,7 @@ class Drug(Base):
     inchi_key = Column(String(100), index=True)
     cas_number = Column(String(50))
     categories = Column(JSONB, default=dict)
+    mechanism_embedding = Column(Vector(384))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
