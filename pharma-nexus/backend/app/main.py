@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import drugs, hypotheses, analysis, ingestion, knowledge_graph, export
+from app.api import drugs, hypotheses, analysis, ingestion, knowledge_graph, export, cancer
 
 
 @asynccontextmanager
@@ -43,6 +43,7 @@ app.include_router(
     knowledge_graph.router, prefix="/api/knowledge-graph", tags=["knowledge-graph"]
 )
 app.include_router(export.router, prefix="/api/export", tags=["export"])
+app.include_router(cancer.router, prefix="/api", tags=["cancer"])
 
 
 @app.get("/health")

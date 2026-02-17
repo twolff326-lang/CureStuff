@@ -131,3 +131,109 @@ def _drug_ingestion_complete(results):
         "status": "completed",
         "source_results": results,
     }
+
+
+# ------------------------------------------------------------------
+# Cancer genomics ingestion tasks
+# ------------------------------------------------------------------
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_cbioportal")
+def ingest_cbioportal(self):
+    """Ingest TCGA cancer genomics data from cBioPortal (primary source)."""
+    logger.info("Starting cBioPortal ingestion task")
+    try:
+        from app.services.ingestion.cbioportal import CBioPortalConnector
+
+        result = _run_async(_run_connector(CBioPortalConnector))
+        logger.info(
+            "cBioPortal ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("cBioPortal ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_tcga")
+def ingest_tcga(self):
+    """Ingest supplementary TCGA data from GDC (Genomic Data Commons)."""
+    logger.info("Starting TCGA/GDC ingestion task")
+    try:
+        from app.services.ingestion.tcga import TCGAConnector
+
+        result = _run_async(_run_connector(TCGAConnector))
+        logger.info(
+            "TCGA/GDC ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("TCGA/GDC ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_cosmic")
+def ingest_cosmic(self, census_tsv_path=None):
+    """Ingest COSMIC cancer gene census and driver mutation data."""
+    logger.info("Starting COSMIC ingestion task")
+    try:
+        from app.services.ingestion.cosmic import COSMICConnector
+
+        kwargs = {}
+        if census_tsv_path:
+            kwargs["census_tsv_path"] = census_tsv_path
+
+        result = _run_async(_run_connector(COSMICConnector, **kwargs))
+        logger.info(
+            "COSMIC ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("COSMIC ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(name="app.tasks.ingest.ingest_all_cancer_data")
+def ingest_all_cancer_data(census_tsv_path=None):
+    """Run all cancer data ingestion: cBioPortal first, then TCGA + COSMIC in parallel.
+
+    cBioPortal runs first because it creates the cancer_types records that
+    TCGA and COSMIC depend on. After cBioPortal completes, TCGA and COSMIC
+    run in parallel via chord.
+    """
+    logger.info("Starting full cancer data ingestion pipeline")
+
+    # cBioPortal first (creates cancer types + primary mutation/expression data)
+    cbio_result = ingest_cbioportal.apply()
+    cbio_result.get(timeout=7200)  # 2h timeout for large datasets
+
+    # Then TCGA and COSMIC in parallel
+    parallel_tasks = chord(
+        [
+            ingest_tcga.s(),
+            ingest_cosmic.s(census_tsv_path=census_tsv_path),
+        ],
+        _cancer_ingestion_complete.s(),
+    )
+    result = parallel_tasks.apply_async()
+    return {
+        "status": "pipeline_started",
+        "cbioportal_task_id": cbio_result.id,
+        "parallel_task_id": result.id,
+    }
+
+
+@celery_app.task(name="app.tasks.ingest.cancer_ingestion_complete")
+def _cancer_ingestion_complete(results):
+    """Callback after TCGA and COSMIC ingestion complete."""
+    logger.info("Cancer data ingestion pipeline complete. Results: %s", results)
+    return {
+        "status": "completed",
+        "source_results": results,
+    }

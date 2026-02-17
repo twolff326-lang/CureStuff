@@ -9,12 +9,16 @@ from app.tasks.celery_app import celery_app
 
 router = APIRouter()
 
-VALID_SOURCES = {"drugbank", "pubchem", "chembl", "all_drugs"}
+VALID_SOURCES = {
+    "drugbank", "pubchem", "chembl", "all_drugs",
+    "cbioportal", "tcga", "cosmic", "all_cancer_data",
+}
 
 
 class IngestionRequest(BaseModel):
     source: str
     xml_path: str | None = None
+    census_tsv_path: str | None = None
 
 
 @router.post("/start")
@@ -36,12 +40,18 @@ async def start_ingestion(request: IngestionRequest):
         "pubchem": "app.tasks.ingest.ingest_pubchem",
         "chembl": "app.tasks.ingest.ingest_chembl",
         "all_drugs": "app.tasks.ingest.ingest_all_drugs",
+        "cbioportal": "app.tasks.ingest.ingest_cbioportal",
+        "tcga": "app.tasks.ingest.ingest_tcga",
+        "cosmic": "app.tasks.ingest.ingest_cosmic",
+        "all_cancer_data": "app.tasks.ingest.ingest_all_cancer_data",
     }
 
     task_name = task_map[source]
     kwargs = {}
     if source in ("drugbank", "all_drugs") and request.xml_path:
         kwargs["xml_path"] = request.xml_path
+    if source in ("cosmic", "all_cancer_data") and request.census_tsv_path:
+        kwargs["census_tsv_path"] = request.census_tsv_path
 
     task = celery_app.send_task(task_name, kwargs=kwargs)
     return {"task_id": task.id, "status": "queued", "source": source}
