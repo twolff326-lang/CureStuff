@@ -897,6 +897,387 @@ class ReportGenerator:
         return str(filepath)
 
     # ------------------------------------------------------------------
+    # g) Drug Portfolio Report
+    # ------------------------------------------------------------------
+
+    async def generate_drug_portfolio_report(
+        self, drug_id: int, db_session: AsyncSession
+    ) -> str:
+        """Generate a portfolio report for a drug across all cancer targets.
+
+        Sections:
+        1. Drug overview (mechanism, targets, pharmacology)
+        2. Portfolio summary (total targets, strength breakdown)
+        3. Molecular targets table
+        4. Ranked cancer targets (all hypotheses for this drug)
+        5. Top 5 detailed profiles
+        6. Distribution by tissue type
+        7. Clinical trials
+        8. Recommendations
+        """
+        drug = await db_session.get(Drug, drug_id)
+        if not drug:
+            raise ValueError(f"Drug {drug_id} not found")
+
+        # All hypotheses for this drug
+        hypotheses = (
+            await db_session.execute(
+                select(Hypothesis)
+                .where(Hypothesis.drug_id == drug_id)
+                .order_by(Hypothesis.composite_score.desc())
+            )
+        ).scalars().all()
+
+        # Build hypothesis data with cancer info
+        hypothesis_data = []
+        tissue_map: dict[str, list[dict]] = {}
+
+        for h in hypotheses:
+            cancer = await db_session.get(CancerType, h.cancer_type_id)
+            c_name = cancer.name if cancer else "?"
+            c_code = cancer.tcga_code if cancer else "?"
+            c_tissue = cancer.tissue if cancer else "Unknown"
+
+            entry = {
+                "id": h.id,
+                "cancer_name": c_name,
+                "tcga_code": c_code,
+                "tissue": c_tissue,
+                "composite_score": h.composite_score,
+                "evidence_strength": h.evidence_strength,
+                "pathway_overlap": h.pathway_overlap_score,
+                "expression": h.expression_correlation_score,
+                "literature": h.literature_support_score,
+                "clinical": h.clinical_evidence_score,
+                "safety": h.safety_score,
+                "novelty": h.novelty_score,
+                "summary": h.summary or "",
+                "narrative_snippet": (h.mechanism_narrative or "")[:200],
+            }
+            hypothesis_data.append(entry)
+            tissue_map.setdefault(c_tissue, []).append(entry)
+
+        # Strength breakdown
+        strength_breakdown = {
+            "strong": sum(1 for h in hypothesis_data if h["evidence_strength"] == "strong"),
+            "moderate": sum(1 for h in hypothesis_data if h["evidence_strength"] == "moderate"),
+            "weak": sum(1 for h in hypothesis_data if h["evidence_strength"] == "weak"),
+            "speculative": sum(1 for h in hypothesis_data if h["evidence_strength"] == "speculative"),
+        }
+
+        # Average score
+        scores = [h["composite_score"] for h in hypothesis_data if h["composite_score"]]
+        avg_score = round(sum(scores) / max(len(scores), 1), 1) if scores else 0
+
+        # Drug targets
+        target_result = await db_session.execute(
+            select(DrugTarget, Target)
+            .join(Target, DrugTarget.target_id == Target.id)
+            .where(DrugTarget.drug_id == drug_id)
+        )
+        targets = [
+            {
+                "gene_symbol": t.gene_symbol,
+                "uniprot_id": t.uniprot_id,
+                "protein_class": t.protein_class,
+                "action_type": dt.action_type,
+                "binding_affinity_nm": dt.binding_affinity_nm,
+            }
+            for dt, t in target_result.all()
+        ]
+
+        # Tissue breakdown
+        tissue_breakdown = []
+        for tissue, entries in sorted(tissue_map.items(), key=lambda x: len(x[1]), reverse=True):
+            t_scores = [e["composite_score"] for e in entries if e["composite_score"]]
+            best = max(entries, key=lambda e: e["composite_score"] or 0)
+            tissue_breakdown.append({
+                "tissue": tissue,
+                "count": len(entries),
+                "avg_score": round(sum(t_scores) / max(len(t_scores), 1), 1) if t_scores else 0,
+                "best_cancer": best["cancer_name"],
+            })
+
+        # Novel discoveries for this drug
+        novel_discoveries = [
+            h for h in hypothesis_data
+            if (h["novelty"] or 0) >= 60 and (h["composite_score"] or 0) >= 45
+        ]
+
+        # Clinical trials
+        trials = await self._get_relevant_trials(drug_id, 0, db_session)
+
+        context = {
+            "report_date": datetime.now().strftime("%B %d, %Y"),
+            "drug": {
+                "name": drug.name,
+                "drugbank_id": drug.drugbank_id,
+                "status": drug.status,
+                "mechanism": drug.mechanism_of_action or "Not described",
+                "indication": drug.indication or "Not described",
+                "pharmacodynamics": drug.pharmacodynamics or "",
+            },
+            "total_hypotheses": len(hypothesis_data),
+            "hypotheses": hypothesis_data[:50],
+            "top_5": hypothesis_data[:5],
+            "targets": targets,
+            "strength_breakdown": strength_breakdown,
+            "avg_score": avg_score,
+            "tissue_breakdown": tissue_breakdown,
+            "novel_discoveries": novel_discoveries,
+            "trials": trials,
+        }
+
+        filename = (
+            f"drug_portfolio_{drug.drugbank_id}"
+            f"_{datetime.now().strftime('%Y%m%d')}.pdf"
+        )
+        filepath = self._render_pdf("drug_portfolio_report.html", context, filename)
+        await self._save_cache_entry("drug_portfolio", drug_id, filepath, db_session)
+        return filepath
+
+    # ------------------------------------------------------------------
+    # h) Comparative Report
+    # ------------------------------------------------------------------
+
+    async def generate_comparative_report(
+        self,
+        db_session: AsyncSession,
+        hypothesis_ids: list[int] | None = None,
+        cancer_type_id: int | None = None,
+        limit: int = 20,
+    ) -> str:
+        """Generate a side-by-side comparison of multiple hypotheses.
+
+        Can compare:
+        - Specific hypotheses by ID list
+        - Top hypotheses for a cancer type
+        - Top hypotheses overall (default)
+
+        Sections:
+        1. Overall ranking table
+        2. Dimension score comparison with visual bars
+        3. Individual summaries
+        4. Statistical summary
+        """
+        if hypothesis_ids:
+            hypotheses = []
+            for hid in hypothesis_ids[:limit]:
+                h = await db_session.get(Hypothesis, hid)
+                if h:
+                    hypotheses.append(h)
+            hypotheses.sort(key=lambda h: h.composite_score or 0, reverse=True)
+        elif cancer_type_id:
+            result = await db_session.execute(
+                select(Hypothesis)
+                .where(Hypothesis.cancer_type_id == cancer_type_id)
+                .order_by(Hypothesis.composite_score.desc())
+                .limit(limit)
+            )
+            hypotheses = list(result.scalars().all())
+        else:
+            result = await db_session.execute(
+                select(Hypothesis)
+                .order_by(Hypothesis.composite_score.desc())
+                .limit(limit)
+            )
+            hypotheses = list(result.scalars().all())
+
+        if not hypotheses:
+            raise ValueError("No hypotheses found for comparison")
+
+        hypothesis_data = []
+        show_adjusted = False
+
+        for h in hypotheses:
+            drug = await db_session.get(Drug, h.drug_id)
+            cancer = await db_session.get(CancerType, h.cancer_type_id)
+
+            ev_count = await db_session.scalar(
+                select(func.count(HypothesisEvidence.id)).where(
+                    HypothesisEvidence.hypothesis_id == h.id
+                )
+            )
+
+            if h.adjusted_score is not None:
+                show_adjusted = True
+
+            hypothesis_data.append({
+                "id": h.id,
+                "drug_name": drug.name if drug else "?",
+                "drug_status": drug.status if drug else "?",
+                "cancer_name": cancer.name if cancer else "?",
+                "tcga_code": cancer.tcga_code if cancer else "?",
+                "composite_score": h.composite_score,
+                "adjusted_score": h.adjusted_score,
+                "llm_confidence": h.llm_confidence_score,
+                "evidence_strength": h.evidence_strength,
+                "pathway_overlap": h.pathway_overlap_score,
+                "expression": h.expression_correlation_score,
+                "literature": h.literature_support_score,
+                "clinical": h.clinical_evidence_score,
+                "safety": h.safety_score,
+                "novelty": h.novelty_score,
+                "summary": h.summary or "",
+                "evidence_count": ev_count or 0,
+            })
+
+        scores = [h["composite_score"] for h in hypothesis_data if h["composite_score"]]
+        strength_counts = {
+            "strong": sum(1 for h in hypothesis_data if h["evidence_strength"] == "strong"),
+            "moderate": sum(1 for h in hypothesis_data if h["evidence_strength"] == "moderate"),
+            "weak": sum(1 for h in hypothesis_data if h["evidence_strength"] == "weak"),
+            "speculative": sum(1 for h in hypothesis_data if h["evidence_strength"] == "speculative"),
+        }
+
+        context = {
+            "report_date": datetime.now().strftime("%B %d, %Y"),
+            "hypotheses": hypothesis_data,
+            "show_adjusted": show_adjusted,
+            "avg_composite": round(sum(scores) / max(len(scores), 1), 1) if scores else 0,
+            "max_composite": max(scores) if scores else 0,
+            "best_hypothesis": (
+                f"{hypothesis_data[0]['drug_name']} → {hypothesis_data[0]['cancer_name']}"
+                if hypothesis_data else "N/A"
+            ),
+            "unique_drugs": len(set(h["drug_name"] for h in hypothesis_data)),
+            "unique_cancers": len(set(h["cancer_name"] for h in hypothesis_data)),
+            "strength_counts": strength_counts,
+        }
+
+        suffix = ""
+        if cancer_type_id:
+            cancer = await db_session.get(CancerType, cancer_type_id)
+            suffix = f"_{cancer.tcga_code}" if cancer else ""
+        elif hypothesis_ids:
+            suffix = f"_custom_{len(hypothesis_ids)}"
+
+        filename = (
+            f"comparative_report{suffix}"
+            f"_{datetime.now().strftime('%Y%m%d')}.pdf"
+        )
+        filepath = self._render_pdf("comparative_report.html", context, filename)
+        entity_id = cancer_type_id if cancer_type_id else None
+        await self._save_cache_entry(
+            "comparative", entity_id, filepath, db_session
+        )
+        return filepath
+
+    # ------------------------------------------------------------------
+    # i) Data Export — Excel
+    # ------------------------------------------------------------------
+
+    async def export_hypotheses_excel(
+        self,
+        db_session: AsyncSession,
+        cancer_type_id: int | None = None,
+        min_score: int = 0,
+        min_novelty: int = 0,
+    ) -> str:
+        """Export hypothesis data as XLSX for Excel.
+
+        Same columns as CSV but formatted as a proper Excel workbook
+        with header styling and auto-sized columns.
+        """
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            raise RuntimeError(
+                "openpyxl is required for Excel export. "
+                "Install with: pip install openpyxl"
+            )
+
+        query = (
+            select(
+                Hypothesis.id,
+                Drug.name.label("drug_name"),
+                Drug.drugbank_id,
+                CancerType.name.label("cancer_name"),
+                CancerType.tcga_code,
+                Hypothesis.composite_score,
+                Hypothesis.adjusted_score,
+                Hypothesis.llm_confidence_score,
+                Hypothesis.evidence_strength,
+                Hypothesis.pathway_overlap_score,
+                Hypothesis.expression_correlation_score,
+                Hypothesis.literature_support_score,
+                Hypothesis.clinical_evidence_score,
+                Hypothesis.safety_score,
+                Hypothesis.novelty_score,
+                Hypothesis.status,
+                Hypothesis.summary,
+            )
+            .join(Drug, Hypothesis.drug_id == Drug.id)
+            .join(CancerType, Hypothesis.cancer_type_id == CancerType.id)
+            .where(
+                Hypothesis.composite_score >= min_score,
+                Hypothesis.novelty_score >= min_novelty,
+            )
+        )
+        if cancer_type_id:
+            query = query.where(Hypothesis.cancer_type_id == cancer_type_id)
+        query = query.order_by(Hypothesis.composite_score.desc())
+
+        results = await db_session.execute(query)
+        rows = results.all()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Hypotheses"
+
+        headers = [
+            "ID", "Drug", "DrugBank ID", "Cancer", "TCGA",
+            "Composite Score", "Adjusted Score", "LLM Confidence",
+            "Evidence Strength",
+            "Pathway Overlap", "Expression", "Literature",
+            "Clinical", "Safety", "Novelty",
+            "Status", "Summary",
+        ]
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1A365D", end_color="1A365D", fill_type="solid")
+
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for row_idx, r in enumerate(rows, 2):
+            ws.cell(row=row_idx, column=1, value=r.id)
+            ws.cell(row=row_idx, column=2, value=r.drug_name)
+            ws.cell(row=row_idx, column=3, value=r.drugbank_id)
+            ws.cell(row=row_idx, column=4, value=r.cancer_name)
+            ws.cell(row=row_idx, column=5, value=r.tcga_code)
+            ws.cell(row=row_idx, column=6, value=r.composite_score)
+            ws.cell(row=row_idx, column=7, value=r.adjusted_score)
+            ws.cell(row=row_idx, column=8, value=r.llm_confidence_score)
+            ws.cell(row=row_idx, column=9, value=r.evidence_strength)
+            ws.cell(row=row_idx, column=10, value=r.pathway_overlap_score)
+            ws.cell(row=row_idx, column=11, value=r.expression_correlation_score)
+            ws.cell(row=row_idx, column=12, value=r.literature_support_score)
+            ws.cell(row=row_idx, column=13, value=r.clinical_evidence_score)
+            ws.cell(row=row_idx, column=14, value=r.safety_score)
+            ws.cell(row=row_idx, column=15, value=r.novelty_score)
+            ws.cell(row=row_idx, column=16, value=r.status)
+            ws.cell(row=row_idx, column=17, value=(r.summary or "")[:500])
+
+        # Auto-size columns
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
+        filename = f"hypotheses_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filepath = self.output_dir / filename
+        wb.save(str(filepath))
+
+        return str(filepath)
+
+    # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
 

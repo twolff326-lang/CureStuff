@@ -169,6 +169,87 @@ def generate_executive_summary_task(self):
 
 @celery_app.task(
     bind=True,
+    max_retries=2,
+    time_limit=600,
+    name="app.tasks.reports.generate_drug_portfolio_task",
+)
+def generate_drug_portfolio_task(self, drug_id: int):
+    """Generate drug portfolio PDF."""
+    logger.info("Generating drug portfolio report for drug_id=%d", drug_id)
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.report_generator import ReportGenerator
+
+            generator = ReportGenerator()
+            async with async_session_factory() as session:
+                filepath = await generator.generate_drug_portfolio_report(
+                    drug_id, session
+                )
+                await session.commit()
+            return filepath
+
+        filepath = _run_async(_generate())
+        logger.info(
+            "Drug portfolio report generated: %s (drug_id=%d)", filepath, drug_id
+        )
+        return {"drug_id": drug_id, "file_path": filepath}
+
+    except Exception as exc:
+        logger.error(
+            "Drug portfolio report failed for drug_id=%d: %s", drug_id, exc
+        )
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    time_limit=600,
+    name="app.tasks.reports.generate_comparative_task",
+)
+def generate_comparative_task(
+    self,
+    hypothesis_ids: list[int] | None = None,
+    cancer_type_id: int | None = None,
+    limit: int = 20,
+):
+    """Generate comparative report PDF."""
+    logger.info(
+        "Generating comparative report (ids=%s, cancer=%s, limit=%d)",
+        hypothesis_ids,
+        cancer_type_id,
+        limit,
+    )
+    try:
+
+        async def _generate():
+            from app.database import async_session_factory
+            from app.services.report_generator import ReportGenerator
+
+            generator = ReportGenerator()
+            async with async_session_factory() as session:
+                filepath = await generator.generate_comparative_report(
+                    session,
+                    hypothesis_ids=hypothesis_ids,
+                    cancer_type_id=cancer_type_id,
+                    limit=limit,
+                )
+                await session.commit()
+            return filepath
+
+        filepath = _run_async(_generate())
+        logger.info("Comparative report generated: %s", filepath)
+        return {"file_path": filepath}
+
+    except Exception as exc:
+        logger.error("Comparative report failed: %s", exc)
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
     max_retries=1,
     time_limit=3600,
     name="app.tasks.reports.generate_all_reports",

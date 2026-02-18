@@ -269,6 +269,21 @@ export const ANALYSIS_PIPELINE =
   "angles: mechanistic explanation, critical review, literature summary, " +
   "experiment design, confidence assessment, and comparison to similar cases.";
 
+export const DRUG_PORTFOLIO_REPORT =
+  "A comprehensive report for one drug across ALL cancer types it could " +
+  "target. Shows ranked cancer targets, molecular targets, tissue distribution, " +
+  "and recommendations for which cancers to pursue.";
+
+export const COMPARATIVE_REPORT =
+  "A side-by-side comparison of multiple hypotheses showing score dimensions, " +
+  "ranking, and individual summaries. Useful for deciding which candidates " +
+  "to prioritize for validation.";
+
+export const BATCH_REPORTS =
+  "Generate all report types at once: executive summary, novel discoveries, " +
+  "all cancer summaries, and top 50 hypothesis reports. This runs in the " +
+  "background and can take several minutes.";
+
 export const ANALYSIS_TYPE_TOOLTIPS: Record<string, string> = {
   narrative:
     "An AI-written explanation of the biological mechanism — how this " +

@@ -117,3 +117,12 @@ export interface PaginatedResponse<T> {
   per_page: number;
   [key: string]: T[] | number;
 }
+
+export interface ReportFile {
+  filename: string;
+  type: string;
+  format: string;
+  size_bytes: number;
+  generated_at: string;
+  download_url: string;
+}

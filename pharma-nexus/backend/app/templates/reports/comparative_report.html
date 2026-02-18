@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    @page {
+        size: letter landscape;
+        margin: 0.75in;
+        @bottom-center {
+            content: "Pharma Nexus — Comparative Report — Page " counter(page) " of " counter(pages);
+            font-size: 8pt;
+            color: #666;
+        }
+    }
+
+    body {
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 1.5;
+        color: #222;
+    }
+
+    h1 { font-size: 20pt; color: #1a365d; margin-bottom: 5pt; page-break-after: avoid; }
+    h2 { font-size: 14pt; color: #2c5282; border-bottom: 2px solid #bee3f8; padding-bottom: 4pt; margin-top: 20pt; page-break-after: avoid; }
+    h3 { font-size: 11pt; color: #2d3748; margin-top: 14pt; page-break-after: avoid; }
+
+    .header {
+        text-align: center;
+        border-bottom: 3pt solid #1a365d;
+        padding-bottom: 15pt;
+        margin-bottom: 20pt;
+    }
+    .header h1 { font-size: 24pt; margin-bottom: 5pt; }
+    .header .subtitle { font-size: 12pt; color: #718096; }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10pt 0;
+        font-size: 9pt;
+    }
+    th {
+        background-color: #edf2f7;
+        padding: 6pt 8pt;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid #cbd5e0;
+    }
+    td {
+        padding: 5pt 8pt;
+        border-bottom: 1px solid #e2e8f0;
+        vertical-align: top;
+    }
+    tr:nth-child(even) { background-color: #f7fafc; }
+
+    .evidence-strong { color: #38a169; font-weight: bold; }
+    .evidence-moderate { color: #d69e2e; }
+    .evidence-weak { color: #e53e3e; }
+    .evidence-speculative { color: #a0aec0; }
+
+    .score-cell {
+        text-align: center;
+        font-weight: bold;
+    }
+    .score-high { background-color: #c6f6d5; }
+    .score-mid { background-color: #fefcbf; }
+    .score-low { background-color: #fed7d7; }
+
+    .score-bar {
+        display: inline-block;
+        height: 10pt;
+        background-color: #3182ce;
+        border-radius: 2pt;
+    }
+    .score-bar-bg {
+        display: inline-block;
+        width: 80pt;
+        height: 10pt;
+        background-color: #edf2f7;
+        border-radius: 2pt;
+    }
+
+    .rank-badge {
+        display: inline-block;
+        width: 20pt;
+        height: 20pt;
+        line-height: 20pt;
+        text-align: center;
+        border-radius: 50%;
+        font-weight: bold;
+        font-size: 9pt;
+        color: white;
+    }
+    .rank-1 { background-color: #d69e2e; }
+    .rank-2 { background-color: #a0aec0; }
+    .rank-3 { background-color: #c27a3e; }
+    .rank-other { background-color: #e2e8f0; color: #4a5568; }
+
+    .narrative {
+        background-color: #f7fafc;
+        padding: 12pt;
+        border-left: 4pt solid #3182ce;
+        margin: 8pt 0;
+        font-size: 9pt;
+    }
+
+    .metadata { font-size: 8pt; color: #a0aec0; }
+    .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+    <h1>Comparative Analysis</h1>
+    <div class="subtitle">Side-by-side comparison of top {{ hypotheses | length }} hypotheses</div>
+    <p style="color: #718096; font-size: 10pt;">{{ report_date }}</p>
+</div>
+
+<!-- COMPARISON TABLE -->
+<h2>Overall Ranking</h2>
+<table>
+    <tr>
+        <th>Rank</th>
+        <th>Drug</th>
+        <th>Cancer</th>
+        <th>Composite</th>
+        <th>Strength</th>
+        <th>Pathway</th>
+        <th>Expression</th>
+        <th>Literature</th>
+        <th>Clinical</th>
+        <th>Safety</th>
+        <th>Novelty</th>
+        {% if show_adjusted %}
+        <th>Adjusted</th>
+        <th>LLM Conf.</th>
+        {% endif %}
+    </tr>
+    {% for h in hypotheses %}
+    <tr>
+        <td>
+            <span class="rank-badge {% if loop.index == 1 %}rank-1{% elif loop.index == 2 %}rank-2{% elif loop.index == 3 %}rank-3{% else %}rank-other{% endif %}">
+                {{ loop.index }}
+            </span>
+        </td>
+        <td><strong>{{ h.drug_name }}</strong></td>
+        <td>{{ h.cancer_name }}</td>
+        <td class="score-cell {% if h.composite_score >= 70 %}score-high{% elif h.composite_score >= 40 %}score-mid{% else %}score-low{% endif %}">
+            {{ h.composite_score }}
+        </td>
+        <td class="evidence-{{ h.evidence_strength }}">{{ h.evidence_strength }}</td>
+        <td>{{ h.pathway_overlap }}</td>
+        <td>{{ h.expression }}</td>
+        <td>{{ h.literature }}</td>
+        <td>{{ h.clinical }}</td>
+        <td>{{ h.safety }}</td>
+        <td>{{ h.novelty }}</td>
+        {% if show_adjusted %}
+        <td>{{ h.adjusted_score or '&mdash;' }}</td>
+        <td>{{ h.llm_confidence or '&mdash;' }}</td>
+        {% endif %}
+    </tr>
+    {% endfor %}
+</table>
+
+<!-- DIMENSION COMPARISON -->
+<h2>Score Dimensions Comparison</h2>
+<table>
+    <tr>
+        <th>Hypothesis</th>
+        <th>Pathway Overlap</th>
+        <th>Expression</th>
+        <th>Literature</th>
+        <th>Clinical</th>
+        <th>Safety</th>
+        <th>Novelty</th>
+    </tr>
+    {% for h in hypotheses %}
+    <tr>
+        <td><strong>{{ h.drug_name }}</strong> &rarr; {{ h.cancer_name }}</td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.pathway_overlap / 100 * 80) | int }}pt;"></span></span>
+            {{ h.pathway_overlap }}
+        </td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.expression / 100 * 80) | int }}pt;"></span></span>
+            {{ h.expression }}
+        </td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.literature / 100 * 80) | int }}pt;"></span></span>
+            {{ h.literature }}
+        </td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.clinical / 100 * 80) | int }}pt;"></span></span>
+            {{ h.clinical }}
+        </td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.safety / 100 * 80) | int }}pt;"></span></span>
+            {{ h.safety }}
+        </td>
+        <td>
+            <span class="score-bar-bg"><span class="score-bar" style="width: {{ (h.novelty / 100 * 80) | int }}pt;"></span></span>
+            {{ h.novelty }}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+<!-- INDIVIDUAL SUMMARIES -->
+{% if hypotheses %}
+<h2 class="page-break">Individual Summaries</h2>
+{% for h in hypotheses[:20] %}
+<h3>{{ loop.index }}. {{ h.drug_name }} &rarr; {{ h.cancer_name }} (Score: {{ h.composite_score }})</h3>
+{% if h.summary %}
+<div class="narrative">{{ h.summary }}</div>
+{% endif %}
+<table>
+    <tr>
+        <td style="width: 25%;"><strong>Evidence:</strong> <span class="evidence-{{ h.evidence_strength }}">{{ h.evidence_strength | upper }}</span></td>
+        <td style="width: 25%;"><strong>Evidence Records:</strong> {{ h.evidence_count }}</td>
+        <td style="width: 25%;"><strong>Drug Status:</strong> {{ h.drug_status }}</td>
+        <td style="width: 25%;"><strong>Novelty:</strong> {{ h.novelty }}/100</td>
+    </tr>
+</table>
+{% endfor %}
+{% endif %}
+
+<!-- STATISTICAL SUMMARY -->
+<h2 class="page-break">Statistical Summary</h2>
+<table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Hypotheses Compared</td><td>{{ hypotheses | length }}</td></tr>
+    <tr><td>Average Composite Score</td><td>{{ avg_composite }}</td></tr>
+    <tr><td>Highest Score</td><td>{{ max_composite }} ({{ best_hypothesis }})</td></tr>
+    <tr><td>Unique Drugs</td><td>{{ unique_drugs }}</td></tr>
+    <tr><td>Unique Cancer Types</td><td>{{ unique_cancers }}</td></tr>
+    <tr><td>Strong Evidence</td><td>{{ strength_counts.strong }}</td></tr>
+    <tr><td>Moderate Evidence</td><td>{{ strength_counts.moderate }}</td></tr>
+</table>
+
+<div class="metadata" style="margin-top: 30pt; border-top: 1pt solid #e2e8f0; padding-top: 10pt;">
+    Report generated: {{ report_date }} | Comparing {{ hypotheses | length }} hypotheses | Pharma Nexus v1.0
+</div>
+
+</body>
+</html>

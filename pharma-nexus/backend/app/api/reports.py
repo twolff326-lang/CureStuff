@@ -3,11 +3,15 @@
 Endpoints:
   POST /api/reports/hypothesis/{id}       — Generate hypothesis PDF
   POST /api/reports/cancer/{id}           — Generate cancer summary PDF
+  POST /api/reports/drug/{id}             — Generate drug portfolio PDF
+  POST /api/reports/comparative           — Generate comparative PDF
   POST /api/reports/novel-discoveries     — Generate novel discoveries PDF
   POST /api/reports/executive-summary     — Generate executive summary PDF
   POST /api/reports/batch                 — Generate all reports (async)
   GET  /api/reports/list                  — List generated reports
+  GET  /api/reports/download/{filename}   — Download a report file
   GET  /api/reports/export/hypotheses/csv — Export hypotheses as CSV
+  GET  /api/reports/export/hypotheses/excel — Export hypotheses as Excel
   GET  /api/reports/export/hypothesis/{id}/json — Export hypothesis as JSON
 """
 
@@ -34,6 +38,12 @@ REPORT_OUTPUT_DIR = Path("/tmp/reports")
 class NovelDiscoveriesParams(BaseModel):
     min_score: int = 45
     min_novelty: int = 60
+
+
+class ComparativeParams(BaseModel):
+    hypothesis_ids: list[int] | None = None
+    cancer_type_id: int | None = None
+    limit: int = 20
 
 
 # ------------------------------------------------------------------
@@ -190,6 +200,82 @@ async def generate_executive_summary(
         )
 
 
+@router.post("/drug/{drug_id}")
+async def generate_drug_portfolio_report(
+    drug_id: int,
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate drug portfolio PDF — one drug across all cancer targets."""
+    generator = ReportGenerator()
+
+    if not force:
+        cached = await generator._get_cached_report("drug_portfolio", drug_id, db)
+        if cached:
+            return FileResponse(
+                cached,
+                media_type="application/pdf",
+                filename=os.path.basename(cached),
+            )
+
+    try:
+        filepath = await generator.generate_drug_portfolio_report(drug_id, db)
+        await db.commit()
+        return FileResponse(
+            filepath,
+            media_type="application/pdf",
+            filename=os.path.basename(filepath),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Drug portfolio report failed: %s", e)
+        raise HTTPException(
+            status_code=500, detail=f"Report generation failed: {str(e)[:200]}"
+        )
+
+
+@router.post("/comparative")
+async def generate_comparative_report(
+    params: ComparativeParams = ComparativeParams(),
+    force: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate comparative report — side-by-side hypothesis comparison."""
+    generator = ReportGenerator()
+
+    entity_id = params.cancer_type_id
+    if not force:
+        cached = await generator._get_cached_report("comparative", entity_id, db)
+        if cached:
+            return FileResponse(
+                cached,
+                media_type="application/pdf",
+                filename=os.path.basename(cached),
+            )
+
+    try:
+        filepath = await generator.generate_comparative_report(
+            db,
+            hypothesis_ids=params.hypothesis_ids,
+            cancer_type_id=params.cancer_type_id,
+            limit=params.limit,
+        )
+        await db.commit()
+        return FileResponse(
+            filepath,
+            media_type="application/pdf",
+            filename=os.path.basename(filepath),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Comparative report failed: %s", e)
+        raise HTTPException(
+            status_code=500, detail=f"Report generation failed: {str(e)[:200]}"
+        )
+
+
 @router.post("/batch")
 async def generate_all_reports_endpoint():
     """Generate all reports asynchronously via Celery.
@@ -214,15 +300,19 @@ async def list_reports():
 
     reports = []
     for f in sorted(REPORT_OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_file() and f.suffix in (".pdf", ".csv", ".json"):
+        if f.is_file() and f.suffix in (".pdf", ".csv", ".json", ".xlsx"):
             stat = f.stat()
 
             # Infer report type from filename
             name = f.stem
-            if name.startswith("hypothesis_"):
+            if name.startswith("hypothesis_") and not name.startswith("hypotheses_"):
                 report_type = "hypothesis"
             elif name.startswith("cancer_summary_"):
                 report_type = "cancer_summary"
+            elif name.startswith("drug_portfolio_"):
+                report_type = "drug_portfolio"
+            elif name.startswith("comparative_report"):
+                report_type = "comparative"
             elif name.startswith("novel_discoveries"):
                 report_type = "novel_discoveries"
             elif name.startswith("executive_summary"):
@@ -261,6 +351,7 @@ async def download_report(filename: str):
         ".pdf": "application/pdf",
         ".csv": "text/csv",
         ".json": "application/json",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
     media_type = media_types.get(suffix, "application/octet-stream")
 
@@ -301,6 +392,36 @@ async def export_csv(
         logger.error("CSV export failed: %s", e)
         raise HTTPException(
             status_code=500, detail=f"CSV export failed: {str(e)[:200]}"
+        )
+
+
+@router.get("/export/hypotheses/excel")
+async def export_excel(
+    cancer_type_id: int | None = Query(None),
+    min_score: int = Query(0),
+    min_novelty: int = Query(0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export hypotheses as Excel (XLSX) for external analysis."""
+    generator = ReportGenerator()
+    try:
+        filepath = await generator.export_hypotheses_excel(
+            db,
+            cancer_type_id=cancer_type_id,
+            min_score=min_score,
+            min_novelty=min_novelty,
+        )
+        return FileResponse(
+            filepath,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=os.path.basename(filepath),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        logger.error("Excel export failed: %s", e)
+        raise HTTPException(
+            status_code=500, detail=f"Excel export failed: {str(e)[:200]}"
         )
 
 
