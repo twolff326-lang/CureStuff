@@ -198,6 +198,10 @@ class BaseConnector(ABC):
             await session.flush()
             total += len(batch)
 
+            # Update ingestion log with intermediate progress
+            await self._update_progress(session, total)
+            await session.commit()
+
         return total
 
     async def batch_upsert_composite(
@@ -238,6 +242,10 @@ class BaseConnector(ABC):
             await session.flush()
             total += len(batch)
 
+            # Update ingestion log with intermediate progress
+            await self._update_progress(session, total)
+            await session.commit()
+
         return total
 
     async def batch_insert_no_conflict(
@@ -258,6 +266,10 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
+
+            # Update ingestion log with intermediate progress
+            await self._update_progress(session, total)
+            await session.commit()
 
         return total
 
@@ -311,6 +323,21 @@ class BaseConnector(ABC):
                 errors=errors,
                 completed_at=datetime.utcnow() if status in ("completed", "failed") else None,
             )
+        )
+        await session.execute(stmt)
+
+    async def _update_progress(self, session: AsyncSession, records_processed: int) -> None:
+        """Update the ingestion log with intermediate progress (records count).
+
+        Called during batch processing so the frontend can show live counts
+        instead of 0 until the task completes.
+        """
+        if self._log_id is None:
+            return
+        stmt = (
+            update(IngestionLog)
+            .where(IngestionLog.id == self._log_id)
+            .values(records_processed=records_processed)
         )
         await session.execute(stmt)
 

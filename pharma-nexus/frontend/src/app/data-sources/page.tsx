@@ -70,6 +70,9 @@ export default function DataSourcesPage() {
   const [recentLogs, setRecentLogs] = useState<IngestionLog[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Track whether any task is actively running (from DB, not just client state)
+  const [hasRunningInDb, setHasRunningInDb] = useState(false);
+
   const loadLogs = useCallback(async () => {
     try {
       const res = await fetchApi<{ logs: IngestionLog[]; total: number }>(
@@ -77,20 +80,34 @@ export default function DataSourcesPage() {
       );
       setLogs(res.logs);
       setRecentLogs(res.logs.slice(0, 10));
+
+      // Detect running tasks from DB — works even if started via curl/API
+      const dbHasRunning = res.logs.some((l) => l.status === "running");
+      setHasRunningInDb(dbHasRunning);
+
+      // Clean up runningTasks for sources that are no longer running
+      setRunningTasks((prev) => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          const log = res.logs.find((l) => l.source === key);
+          if (log && log.status !== "running") {
+            delete next[key];
+          }
+        }
+        return next;
+      });
     } catch { /* backend may not be running */ }
     setLoading(false);
   }, []);
 
   useEffect(() => {
     loadLogs();
-    // Poll for updates while tasks are running
+    // Always poll — fast (3s) when tasks are running, slow (15s) otherwise
     const interval = setInterval(() => {
-      if (Object.keys(runningTasks).length > 0) {
-        loadLogs();
-      }
-    }, 5000);
+      loadLogs();
+    }, hasRunningInDb || Object.keys(runningTasks).length > 0 ? 3000 : 15000);
     return () => clearInterval(interval);
-  }, [loadLogs, runningTasks]);
+  }, [loadLogs, runningTasks, hasRunningInDb]);
 
   // Get latest log for a source
   const getSourceStatus = (sourceKey: string): IngestionLog | null => {
