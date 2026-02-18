@@ -15,18 +15,18 @@ interface SourceDef {
   key: string;                     // maps to ingestion API "source" param
   description: string;
   category: "drugs" | "cancer" | "pathways" | "literature" | "analysis";
-  requires?: string;               // e.g. "xml_path" for DrugBank
+  fallback?: string;               // describes what happens without the licensed file
 }
 
 const SOURCES: SourceDef[] = [
   // Drugs
-  { name: "DrugBank", key: "drugbank", description: "FDA-approved drugs, mechanisms, targets, interactions", category: "drugs", requires: "xml_path" },
+  { name: "DrugBank", key: "drugbank", description: "FDA-approved drugs, mechanisms, targets, interactions", category: "drugs", fallback: "Without XML: loads 36 well-known drugs via PubChem API" },
   { name: "PubChem", key: "pubchem", description: "Chemical properties, bioassay results, compound data", category: "drugs" },
   { name: "ChEMBL", key: "chembl", description: "Bioactivity data, target-binding affinities", category: "drugs" },
   // Cancer
   { name: "TCGA", key: "tcga", description: "Molecular profiles of 11,000+ tumors across 33 cancer types", category: "cancer" },
   { name: "cBioPortal", key: "cbioportal", description: "Cancer genomics: mutations, copy number, expression", category: "cancer" },
-  { name: "COSMIC", key: "cosmic", description: "Catalogue of somatic mutations in cancer", category: "cancer", requires: "census_tsv_path" },
+  { name: "COSMIC", key: "cosmic", description: "Catalogue of somatic mutations in cancer", category: "cancer", fallback: "Without TSV: annotates 42 known cancer driver genes" },
   // Pathways
   { name: "KEGG", key: "kegg", description: "Biological pathway maps and molecular interactions", category: "pathways" },
   { name: "Reactome", key: "reactome", description: "Curated pathway database with molecular details", category: "pathways" },
@@ -159,7 +159,14 @@ export default function DataSourcesPage() {
                       {style.label}
                     </span>
                   </div>
-                  <p className="text-sm text-slate-500 mb-3 flex-1">{source.description}</p>
+                  <p className="text-sm text-slate-500 mb-2 flex-1">{source.description}</p>
+
+                  {/* Fallback info for licensed sources */}
+                  {source.fallback && (
+                    <p className="text-xs text-amber-600 bg-amber-50 rounded px-2 py-1 mb-3">
+                      {source.fallback}
+                    </p>
+                  )}
 
                   {/* Stats row */}
                   {log && log.status === "completed" && (
@@ -193,8 +200,6 @@ export default function DataSourcesPage() {
                     className={`w-full px-3 py-1.5 text-sm rounded-md transition-colors ${
                       isRunning
                         ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                        : source.requires
-                        ? "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"
                         : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"
                     }`}
                   >
@@ -202,8 +207,6 @@ export default function DataSourcesPage() {
                       ? "Running..."
                       : log?.status === "completed"
                       ? "Re-ingest"
-                      : source.requires
-                      ? `Requires ${source.requires}`
                       : "Start Ingestion"
                     }
                   </button>
