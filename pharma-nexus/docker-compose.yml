@@ -101,7 +101,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pharma-nexus-celery
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q celery,ingestion,analysis,generation,reports
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
       - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}

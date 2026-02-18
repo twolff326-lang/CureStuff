@@ -36,6 +36,14 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# Check Docker daemon is actually running
+if ! docker info &> /dev/null; then
+    echo -e "${RED}Error: Docker daemon is not running.${NC}"
+    echo "Start it with: sudo systemctl start docker  (Linux)"
+    echo "           or: open Docker Desktop            (Mac/Windows)"
+    exit 1
+fi
+
 if ! docker compose version &> /dev/null && ! docker-compose version &> /dev/null; then
     echo -e "${RED}Error: Docker Compose is not installed.${NC}"
     exit 1
