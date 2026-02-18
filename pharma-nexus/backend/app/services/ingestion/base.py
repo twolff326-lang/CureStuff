@@ -342,7 +342,11 @@ class BaseConnector(ABC):
 
             try:
                 raw_records = await self.fetch_data(session)
-                self._records_processed = len(raw_records) if raw_records else 0
+                # Only overwrite _records_processed if the connector didn't
+                # already set it inside fetch_data() (many connectors commit
+                # data in batches and return [] while tracking count internally).
+                if raw_records:
+                    self._records_processed = len(raw_records)
 
                 await self._update_log(
                     session, self._log_id, "completed",
