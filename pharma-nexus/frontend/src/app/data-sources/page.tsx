@@ -68,6 +68,7 @@ export default function DataSourcesPage() {
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Record<string, string>>({}); // source -> task_id
   const [recentLogs, setRecentLogs] = useState<IngestionLog[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const loadLogs = useCallback(async () => {
     try {
@@ -97,6 +98,7 @@ export default function DataSourcesPage() {
   };
 
   const startIngestion = async (source: SourceDef) => {
+    setError(null);
     try {
       const res = await fetchApi<{ task_id: string; status: string }>("/api/ingestion/start", {
         method: "POST",
@@ -105,7 +107,11 @@ export default function DataSourcesPage() {
       setRunningTasks((prev) => ({ ...prev, [source.key]: res.task_id }));
       // Refresh logs after a short delay
       setTimeout(loadLogs, 2000);
-    } catch { /* fail silently */ }
+    } catch (err) {
+      setError(
+        `Failed to start ${source.name} ingestion. Is the backend running? (docker compose up -d)`
+      );
+    }
   };
 
   const grouped = CATEGORY_ORDER.map((cat) => ({
@@ -132,6 +138,16 @@ export default function DataSourcesPage() {
           </button>
         </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <span className="text-red-600 text-sm flex-1">{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 text-sm font-medium">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Source cards by category */}
       {grouped.map((group) => (
