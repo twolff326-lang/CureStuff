@@ -42,6 +42,17 @@ class Settings(BaseSettings):
         "standard (Sonnet bulk + Opus top), premium (Opus everything)",
     )
 
+    # Model overrides — set these to use newer models without code changes
+    model_haiku: str = Field(
+        default="claude-haiku-4-5-20251001", alias="MODEL_HAIKU"
+    )
+    model_sonnet: str = Field(
+        default="claude-sonnet-4-5-20250929", alias="MODEL_SONNET"
+    )
+    model_opus: str = Field(
+        default="claude-opus-4-6", alias="MODEL_OPUS"
+    )
+
     # NCBI / PubMed
     ncbi_api_key: str = Field(default="", alias="NCBI_API_KEY")
     ncbi_email: str = Field(default="", alias="NCBI_EMAIL")

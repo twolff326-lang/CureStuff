@@ -12,9 +12,9 @@ Rate limiting:
   - Max 5 concurrent Claude API calls (asyncio.Semaphore)
   - Max 50 calls per minute (token bucket)
 
-Model selection:
-  - claude-sonnet-4-20250514 for bulk analysis
-  - claude-opus-4-20250514 for top hypotheses (composite_score >= 70)
+Model selection (configurable via MODEL_HAIKU, MODEL_SONNET, MODEL_OPUS env vars):
+  - Sonnet for bulk analysis
+  - Opus for top hypotheses (composite_score >= 70)
 """
 
 import asyncio
@@ -42,16 +42,35 @@ from app.services.pathway_analyzer import PathwayAnalyzer
 
 logger = logging.getLogger(__name__)
 
-MODEL_HAIKU = "claude-haiku-4-5-20251001"
-MODEL_SONNET = "claude-sonnet-4-20250514"
-MODEL_OPUS = "claude-opus-4-20250514"
+# Model IDs read from settings so you can upgrade via env vars:
+#   MODEL_HAIKU=claude-haiku-4-5-20251001
+#   MODEL_SONNET=claude-sonnet-4-5-20250929
+#   MODEL_OPUS=claude-opus-4-6
+MODEL_HAIKU = settings.model_haiku
+MODEL_SONNET = settings.model_sonnet
+MODEL_OPUS = settings.model_opus
 TOP_HYPOTHESIS_THRESHOLD = 70
 
-# Pricing per 1M tokens (USD)
+# Pricing per 1M tokens (USD) — keyed by model ID prefix for forward compat
+_PRICING_TABLE = {
+    "claude-haiku": {"input": 1.0, "output": 5.0},
+    "claude-sonnet": {"input": 3.0, "output": 15.0},
+    "claude-opus": {"input": 15.0, "output": 75.0},
+}
+
+
+def _lookup_pricing(model_id: str) -> dict[str, float]:
+    """Match a model ID to pricing by prefix, falling back to Sonnet pricing."""
+    for prefix, prices in _PRICING_TABLE.items():
+        if model_id.startswith(prefix):
+            return prices
+    return _PRICING_TABLE["claude-sonnet"]
+
+
 PRICING = {
-    MODEL_HAIKU: {"input": 1.0, "output": 5.0},
-    MODEL_SONNET: {"input": 3.0, "output": 15.0},
-    MODEL_OPUS: {"input": 15.0, "output": 75.0},
+    MODEL_HAIKU: _lookup_pricing(MODEL_HAIKU),
+    MODEL_SONNET: _lookup_pricing(MODEL_SONNET),
+    MODEL_OPUS: _lookup_pricing(MODEL_OPUS),
 }
 
 # Cost mode → model selection strategy
