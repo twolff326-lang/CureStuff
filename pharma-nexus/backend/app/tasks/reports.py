@@ -8,21 +8,12 @@ Tasks:
   - generate_all_reports: Generate all report types (batch)
 """
 
-import asyncio
 import logging
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async, task_session
 
 logger = logging.getLogger(__name__)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 @celery_app.task(
@@ -37,18 +28,17 @@ def generate_hypothesis_report_task(self, hypothesis_id: int):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_hypothesis_report(
                     hypothesis_id, session
                 )
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info(
             "Hypothesis report generated: %s (id=%d)", filepath, hypothesis_id
         )
@@ -75,18 +65,17 @@ def generate_cancer_summary_task(self, cancer_type_id: int):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_cancer_summary_report(
                     cancer_type_id, session
                 )
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info(
             "Cancer summary report generated: %s (id=%d)", filepath, cancer_type_id
         )
@@ -117,18 +106,17 @@ def generate_novel_discoveries_task(
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_novel_discoveries_report(
                     session, min_score=min_score, min_novelty=min_novelty
                 )
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info("Novel discoveries report generated: %s", filepath)
         return {"file_path": filepath}
 
@@ -149,16 +137,15 @@ def generate_executive_summary_task(self):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_executive_summary(session)
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info("Executive summary report generated: %s", filepath)
         return {"file_path": filepath}
 
@@ -179,18 +166,17 @@ def generate_drug_portfolio_task(self, drug_id: int):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_drug_portfolio_report(
                     drug_id, session
                 )
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info(
             "Drug portfolio report generated: %s (drug_id=%d)", filepath, drug_id
         )
@@ -225,11 +211,10 @@ def generate_comparative_task(
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.report_generator import ReportGenerator
 
             generator = ReportGenerator()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 filepath = await generator.generate_comparative_report(
                     session,
                     hypothesis_ids=hypothesis_ids,
@@ -239,7 +224,7 @@ def generate_comparative_task(
                 await session.commit()
             return filepath
 
-        filepath = _run_async(_generate())
+        filepath = run_async(_generate())
         logger.info("Comparative report generated: %s", filepath)
         return {"file_path": filepath}
 
@@ -268,7 +253,6 @@ def generate_all_reports(self):
         async def _generate_all():
             from sqlalchemy import select
 
-            from app.database import async_session_factory
             from app.models.cancer_type import CancerType
             from app.models.hypothesis import Hypothesis
             from app.services.report_generator import ReportGenerator
@@ -282,7 +266,7 @@ def generate_all_reports(self):
                 "errors": [],
             }
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 # 1. Executive summary
                 self.update_state(
                     state="PROGRESS",
@@ -398,7 +382,7 @@ def generate_all_reports(self):
                 "errors": [str(e)[:200] for e in results["errors"][:20]],
             }
 
-        result = _run_async(_generate_all())
+        result = run_async(_generate_all())
         logger.info(
             "Batch report generation complete: %d cancer summaries, "
             "%d hypothesis reports, %d errors",

@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -272,7 +272,7 @@ class BaseConnector(ABC):
             "error": str(error),
             "type": type(error).__name__,
             "record_id": record_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
         }
         self._errors.append(error_entry)
         logger.error("Ingestion error [%s] %s: %s", self.get_source_name(), context, error)
@@ -288,7 +288,7 @@ class BaseConnector(ABC):
             status="running",
             records_processed=0,
             errors=[],
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.utcnow(),
         )
         session.add(log_entry)
         await session.flush()
@@ -309,7 +309,7 @@ class BaseConnector(ABC):
                 status=status,
                 records_processed=records_processed,
                 errors=errors,
-                completed_at=datetime.now(timezone.utc) if status in ("completed", "failed") else None,
+                completed_at=datetime.utcnow() if status in ("completed", "failed") else None,
             )
         )
         await session.execute(stmt)

@@ -13,21 +13,12 @@ Tasks (LLM analysis):
   - generate_single_analysis: One specific analysis type for one hypothesis
 """
 
-import asyncio
 import logging
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async, task_session
 
 logger = logging.getLogger(__name__)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 @celery_app.task(
@@ -48,14 +39,13 @@ def compute_all_differential_expression(self, cancer_type_id=None):
         async def _compute():
             from sqlalchemy import select
 
-            from app.database import async_session_factory
             from app.models.cancer_type import CancerType
             from app.services.expression_analyzer import ExpressionAnalyzer
 
             analyzer = ExpressionAnalyzer()
             results = {}
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 if cancer_type_id:
                     cancer_ids = [cancer_type_id]
                 else:
@@ -114,7 +104,7 @@ def compute_all_differential_expression(self, cancer_type_id=None):
 
             return results
 
-        results = _run_async(_compute())
+        results = run_async(_compute())
         total_genes = sum(
             r.get("genes_analyzed", 0) for r in results.values()
         )
@@ -159,7 +149,6 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
         async def _compute():
             from sqlalchemy import select
 
-            from app.database import async_session_factory
             from app.models.cancer_type import CancerType
             from app.models.drug import Drug
             from app.services.expression_analyzer import ExpressionAnalyzer
@@ -168,7 +157,7 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
             scored = 0
             errors = 0
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 # Get cancer types to process
                 if cancer_type_id:
                     cancer_ids = [cancer_type_id]
@@ -231,7 +220,7 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
 
             return {"scored": scored, "errors": errors}
 
-        result = _run_async(_compute())
+        result = run_async(_compute())
         logger.info(
             "Drug expression scoring complete: %d scored, %d errors",
             result["scored"],
@@ -265,7 +254,6 @@ def compute_pathway_activities(self, cancer_type_id=None):
         async def _compute():
             from sqlalchemy import select
 
-            from app.database import async_session_factory
             from app.models.cancer_type import CancerType
             from app.models.pathway import Pathway
             from app.services.expression_analyzer import ExpressionAnalyzer
@@ -274,7 +262,7 @@ def compute_pathway_activities(self, cancer_type_id=None):
             computed = 0
             errors = 0
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 # Get cancer types
                 if cancer_type_id:
                     cancer_ids = [cancer_type_id]
@@ -338,7 +326,7 @@ def compute_pathway_activities(self, cancer_type_id=None):
 
             return {"computed": computed, "errors": errors}
 
-        result = _run_async(_compute())
+        result = run_async(_compute())
         logger.info(
             "Pathway activity computation complete: %d computed, %d errors",
             result["computed"],
@@ -450,18 +438,17 @@ def generate_narratives_batch(self, min_score=0.0, limit=100):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.llm_analyst import LLMAnalyst
 
             analyst = LLMAnalyst()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 results = await analyst.generate_narratives_batch(
                     session, min_score=min_score, limit=limit
                 )
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Narrative batch complete: %d/%d generated, %d errors",
             results["completed"],
@@ -501,18 +488,17 @@ def generate_full_analysis_batch(self, min_score=50.0, limit=20):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.llm_analyst import LLMAnalyst
 
             analyst = LLMAnalyst()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 results = await analyst.generate_full_analysis_batch(
                     session, min_score=min_score, limit=limit
                 )
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Full analysis batch complete: %d/%d generated, %d errors",
             results["completed"],
@@ -552,11 +538,10 @@ def generate_comparative_analyses(self, cancer_type_id=None, min_score=30.0):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.llm_analyst import LLMAnalyst
 
             analyst = LLMAnalyst()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 results = await analyst.generate_comparative_analyses(
                     session,
                     cancer_type_id=cancer_type_id,
@@ -565,7 +550,7 @@ def generate_comparative_analyses(self, cancer_type_id=None, min_score=30.0):
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Comparative analysis complete: %d cancer types, %d analyses, %d errors",
             results["cancer_types_processed"],
@@ -596,7 +581,6 @@ def generate_single_analysis(self, hypothesis_id, analysis_type):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.llm_analyst import LLMAnalyst
 
             analyst = LLMAnalyst()
@@ -615,12 +599,12 @@ def generate_single_analysis(self, hypothesis_id, analysis_type):
                     f"Must be one of: {', '.join(method_map)}"
                 )
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 result = await method_map[analysis_type](hypothesis_id, session)
                 await session.commit()
             return result
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "%s analysis complete for hypothesis %d (model=%s, tokens=%d+%d)",
             analysis_type,

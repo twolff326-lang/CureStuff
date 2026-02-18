@@ -10,21 +10,12 @@ Tasks:
   - promote_proposals: Promote discovery proposals into hypothesis pipeline
 """
 
-import asyncio
 import logging
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async, task_session
 
 logger = logging.getLogger(__name__)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 @celery_app.task(
@@ -46,11 +37,10 @@ def generate_hypotheses_for_cancer(self, cancer_type_id, min_score=15.0):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.hypothesis_engine import HypothesisEngine
 
             engine = HypothesisEngine()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 results = await engine.generate_for_cancer(
                     cancer_type_id, session, min_score=min_score
                 )
@@ -71,7 +61,7 @@ def generate_hypotheses_for_cancer(self, cancer_type_id, min_score=15.0):
                     ],
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Hypothesis generation complete for cancer_type_id=%d: %d hypotheses",
             cancer_type_id,
@@ -103,11 +93,10 @@ def generate_hypotheses_for_drug(self, drug_id, min_score=15.0):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.hypothesis_engine import HypothesisEngine
 
             engine = HypothesisEngine()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 results = await engine.generate_for_drug(
                     drug_id, session, min_score=min_score
                 )
@@ -128,7 +117,7 @@ def generate_hypotheses_for_drug(self, drug_id, min_score=15.0):
                     ],
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Hypothesis generation complete for drug_id=%d: %d hypotheses",
             drug_id,
@@ -160,7 +149,6 @@ def generate_all_hypotheses(self, min_score=15.0):
         async def _generate():
             from sqlalchemy import select
 
-            from app.database import async_session_factory
             from app.models.cancer_type import CancerType
             from app.services.hypothesis_engine import HypothesisEngine
 
@@ -169,7 +157,7 @@ def generate_all_hypotheses(self, min_score=15.0):
             errors = 0
             results_by_cancer = {}
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 cancer_result = await session.execute(
                     select(CancerType.id, CancerType.tcga_code)
                 )
@@ -223,7 +211,7 @@ def generate_all_hypotheses(self, min_score=15.0):
                 "results_by_cancer": results_by_cancer,
             }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Full hypothesis generation complete: %d total hypotheses, %d errors",
             result["total_generated"],
@@ -255,14 +243,13 @@ def rescore_hypotheses(self, preset_name=None):
     try:
 
         async def _rescore():
-            from app.database import async_session_factory
             from app.services.hypothesis_engine import HypothesisEngine
             from app.services.scoring_config import ScoringConfig
 
             engine = HypothesisEngine()
             config = ScoringConfig()
 
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 weights = None
                 if preset_name:
                     preset = await config.get_preset(preset_name, session)
@@ -276,7 +263,7 @@ def rescore_hypotheses(self, preset_name=None):
 
                 return await engine.rescore_all(session, weights=weights)
 
-        result = _run_async(_rescore())
+        result = run_async(_rescore())
         logger.info(
             "Hypothesis rescoring complete: %d/%d rescored",
             result["rescored"],
@@ -309,16 +296,15 @@ def run_confidence_batch(self, min_score=0.0, limit=200, cost_mode=None):
     try:
 
         async def _assess():
-            from app.database import async_session_factory
             from app.services.llm_analyst import LLMAnalyst
 
             analyst = LLMAnalyst(cost_mode=cost_mode)
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 return await analyst.assess_confidence_batch(
                     session, min_score=min_score, limit=limit
                 )
 
-        result = _run_async(_assess())
+        result = run_async(_assess())
         logger.info(
             "Confidence batch complete: %d/%d assessed (cost_mode=%s)",
             result["completed"],
@@ -355,18 +341,17 @@ def run_synthesis_discovery(
     try:
 
         async def _discover():
-            from app.database import async_session_factory
             from app.services.synthesis_discovery import SynthesisDiscovery
 
             svc = SynthesisDiscovery(cost_mode=cost_mode)
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 return await svc.discover_batch(
                     session,
                     cancer_type_ids=cancer_type_ids,
                     limit=limit,
                 )
 
-        result = _run_async(_discover())
+        result = run_async(_discover())
         logger.info(
             "Synthesis discovery complete: %d proposals across %d cancer types ($%.4f)",
             result["total_proposals"],
@@ -395,18 +380,17 @@ def promote_proposals(self, min_confidence=0.5, limit=50):
     try:
 
         async def _promote():
-            from app.database import async_session_factory
             from app.services.synthesis_discovery import SynthesisDiscovery
 
             svc = SynthesisDiscovery()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 return await svc.promote_proposals(
                     session,
                     min_confidence=min_confidence,
                     limit=limit,
                 )
 
-        result = _run_async(_promote())
+        result = run_async(_promote())
         logger.info(
             "Promotion complete: %d/%d promoted",
             result["promoted"],
