@@ -205,6 +205,49 @@ async def run_retroactive_validation(
 # ------------------------------------------------------------------
 
 
+# ------------------------------------------------------------------
+# Novelty & plausibility endpoints
+# ------------------------------------------------------------------
+
+
+@router.get("/novelty-check")
+async def check_novelty(
+    drug_name: str = Query(..., description="Drug name"),
+    cancer_name: str = Query(..., description="Cancer type name"),
+):
+    """Real-time PubMed novelty check for a drug-cancer combination.
+
+    Queries PubMed to see how many papers already study this connection.
+    A "discovery" with 50 existing papers is not a discovery.
+    """
+    from app.services.novelty_plausibility import NoveltyChecker
+
+    checker = NoveltyChecker()
+    return await checker.check_pubmed_novelty(drug_name, cancer_name)
+
+
+@router.get("/dosing-plausibility/{drug_id}")
+async def check_dosing_plausibility(
+    drug_id: int,
+    cancer_type_id: int = Query(0, description="Cancer type ID (for context)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check whether a drug can plausibly reach therapeutic concentration.
+
+    Compares IC50/Ki binding affinity from bioassays against estimated
+    achievable plasma concentration based on drug approval status.
+    """
+    from app.services.novelty_plausibility import DosingPlausibilityChecker
+
+    checker = DosingPlausibilityChecker()
+    return await checker.check_dosing_plausibility(drug_id, cancer_type_id, db)
+
+
+# ------------------------------------------------------------------
+# Ablation study endpoints
+# ------------------------------------------------------------------
+
+
 @router.post("/ablation/{cancer_type_id}")
 async def run_ablation_single(
     cancer_type_id: int,

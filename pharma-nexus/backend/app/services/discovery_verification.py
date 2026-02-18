@@ -1,7 +1,7 @@
 """Multi-round verification pipeline for LLM discovery proposals.
 
 The original synthesis_discovery.py generates proposals in a single LLM
-call. This module adds three verification layers that transform it from
+call. This module adds five verification layers that transform it from
 "prompt engineering" into a defensible scientific method:
 
 1. Adversarial Critique — A second LLM call challenges each proposal,
@@ -15,6 +15,15 @@ call. This module adds three verification layers that transform it from
 3. Chain Verification — For each step in the transitive chain
    (Drug→Target→Pathway→Cancer), check whether the intermediate links
    have structured database evidence. Produces a chain_evidence_score.
+
+4. Novelty Check — Real-time PubMed query to verify that the proposed
+   drug-cancer connection is not already well-studied. A "discovery"
+   with 50 existing papers is not a discovery.
+
+5. Dosing Plausibility — Cross-reference the drug's binding affinity
+   (IC50/Ki from bioassays) against achievable plasma concentrations.
+   If the drug can't reach therapeutic concentration, the hypothesis
+   is pharmacologically implausible.
 
 Together, these produce a final `verified_score` that is calibrated
 against actual database evidence rather than relying on LLM self-assessment.
@@ -511,11 +520,16 @@ class ProposalVerifier:
         cancer_context: dict[str, Any],
         session: AsyncSession,
     ) -> dict[str, Any]:
-        """Run all three verification rounds on a single proposal.
+        """Run all five verification rounds on a single proposal.
 
         Returns the proposal enriched with verification scores and a
         final verified_score that combines all evidence.
         """
+        from app.services.novelty_plausibility import (
+            DosingPlausibilityChecker,
+            NoveltyChecker,
+        )
+
         # Round 1: Adversarial critique (LLM call)
         critique = await self.adversarial_critique(proposal, cancer_context)
 
@@ -525,21 +539,52 @@ class ProposalVerifier:
         # Round 3: Chain verification (database check)
         chain = await self.verify_chain(proposal, cancer_type_id, session)
 
+        # Round 4: Novelty check (PubMed query)
+        novelty_checker = NoveltyChecker()
+        drug_name = proposal.get("drug_name", "")
+        cancer_name = cancer_context.get("name", "")
+        novelty = await novelty_checker.check_pubmed_novelty(drug_name, cancer_name)
+
+        # Round 5: Dosing plausibility (database check)
+        dosing_checker = DosingPlausibilityChecker()
+        drug_id = proposal.get("drug_id")
+        if drug_id:
+            dosing = await dosing_checker.check_dosing_plausibility(
+                drug_id, cancer_type_id, session
+            )
+        else:
+            dosing = {
+                "plausible": None,
+                "verdict": "no_drug_id",
+                "details": [],
+            }
+
         # Compute verified score
         original_confidence = proposal.get("confidence", 0)
         critique_confidence = critique.get("adjusted_confidence", original_confidence)
         grounding_score = grounding.get("grounding_score", 0)
         chain_score = chain.get("chain_evidence_score", 0)
 
-        # Verified score weights evidence from all three sources:
-        #   40% adversarial-adjusted confidence (LLM-vs-LLM)
-        #   30% chain evidence score (structured database verification)
-        #   20% grounding score (citation verification)
+        # Verified score weights evidence from all five sources:
+        #   35% adversarial-adjusted confidence (LLM-vs-LLM)
+        #   25% chain evidence score (structured database verification)
+        #   15% grounding score (citation verification)
+        #   15% novelty score (0 if well_studied, scaled by tier)
         #   10% original confidence (proposal author's assessment)
+        novelty_tier = novelty.get("novelty_tier", "check_failed")
+        novelty_score = {
+            "novel": 1.0,
+            "understudied": 0.8,
+            "known": 0.3,
+            "well_studied": 0.0,
+            "check_failed": 0.5,  # Neutral if check failed
+        }.get(novelty_tier, 0.5)
+
         verified_score = (
-            0.40 * critique_confidence
-            + 0.30 * chain_score
-            + 0.20 * grounding_score
+            0.35 * critique_confidence
+            + 0.25 * chain_score
+            + 0.15 * grounding_score
+            + 0.15 * novelty_score
             + 0.10 * original_confidence
         )
 
@@ -553,10 +598,25 @@ class ProposalVerifier:
         }.get(severity, 0.7)
         verified_score *= severity_multiplier
 
+        # Apply dosing penalty — implausible dosing kills the proposal
+        dosing_verdict = dosing.get("verdict", "no_affinity_data")
+        dosing_multiplier = {
+            "highly_plausible": 1.0,
+            "plausible": 1.0,
+            "marginal": 0.7,
+            "implausible": 0.2,
+            "no_affinity_data": 1.0,  # No data = no penalty
+            "drug_not_found": 1.0,
+            "no_drug_id": 1.0,
+        }.get(dosing_verdict, 1.0)
+        verified_score *= dosing_multiplier
+
         should_proceed = (
             critique.get("should_proceed", False)
             and verified_score >= 0.25
             and chain_score > 0  # Must have SOME database evidence
+            and novelty_tier not in ("well_studied",)  # Already known = not a discovery
+            and dosing_verdict != "implausible"  # Can't reach target = dead
         )
 
         return {
@@ -584,6 +644,23 @@ class ProposalVerifier:
                     "verdict": chain.get("verdict"),
                     "links_verified": chain.get("links_verified", 0),
                     "link_details": chain.get("link_details", []),
+                },
+                "novelty_check": {
+                    "score": novelty_score,
+                    "tier": novelty_tier,
+                    "paper_count": novelty.get("paper_count", -1),
+                    "total_evidence": novelty.get("total_evidence", -1),
+                    "is_novel": novelty.get("is_novel"),
+                    "interpretation": novelty.get("interpretation", ""),
+                    "top_papers": novelty.get("top_papers", [])[:5],
+                },
+                "dosing_plausibility": {
+                    "verdict": dosing_verdict,
+                    "plausible": dosing.get("plausible"),
+                    "coverage_ratio": dosing.get("coverage_ratio"),
+                    "estimated_cmax_nm": dosing.get("estimated_cmax_nm"),
+                    "median_affinity_nm": dosing.get("median_affinity_nm"),
+                    "interpretation": dosing.get("interpretation", ""),
                 },
             },
             "cost_usd": critique.get("cost_usd", 0),
