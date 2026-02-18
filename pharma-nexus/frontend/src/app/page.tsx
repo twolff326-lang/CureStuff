@@ -3,6 +3,15 @@
 import Link from "next/link";
 import { useEffect, useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
+import {
+  COMPOSITE_SCORE,
+  EVIDENCE_STRENGTH,
+  STRENGTH_STRONG,
+  STRENGTH_MODERATE,
+  STRENGTH_SUGGESTIVE,
+  STRENGTH_SPECULATIVE,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { Hypothesis, HypothesisStats } from "@/types";
 
 interface DashboardCounts {
@@ -179,6 +188,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Avg Composite Score"
+          tooltip={COMPOSITE_SCORE}
           value={
             loading
               ? "..."
@@ -194,13 +204,16 @@ export default function DashboardPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 mb-8">
           <h2 className="text-sm font-medium text-slate-500 mb-3">
             Evidence Strength Distribution
+            <InfoTip text={EVIDENCE_STRENGTH} />
           </h2>
           <div className="flex gap-4">
-            {Object.entries(stats.by_evidence_strength).map(([strength, count]) => (
+            {Object.entries(stats.by_evidence_strength).map(([strength, count]) => {
+              const tip = { strong: STRENGTH_STRONG, moderate: STRENGTH_MODERATE, suggestive: STRENGTH_SUGGESTIVE, speculative: STRENGTH_SPECULATIVE }[strength] ?? "";
+              return (
               <div key={strength} className="flex-1">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium text-slate-600 capitalize">
-                    {strength}
+                    {strength}{tip && <InfoTip text={tip} />}
                   </span>
                   <span className="text-xs text-slate-400">{count as number}</span>
                 </div>
@@ -224,7 +237,8 @@ export default function DashboardPage() {
                   />
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         </div>
       )}
@@ -274,10 +288,10 @@ export default function DashboardPage() {
                     Hypothesis
                   </th>
                   <th className="px-4 py-2.5 text-center text-xs font-medium text-slate-500 uppercase w-20">
-                    Score
+                    Score<InfoTip text={COMPOSITE_SCORE} />
                   </th>
                   <th className="px-4 py-2.5 text-center text-xs font-medium text-slate-500 uppercase w-24">
-                    Strength
+                    Strength<InfoTip text={EVIDENCE_STRENGTH} />
                   </th>
                 </tr>
               </thead>
@@ -352,10 +366,12 @@ export default function DashboardPage() {
   );
 }
 
-function StatCard({ title, value }: { title: string; value: string }) {
+function StatCard({ title, value, tooltip }: { title: string; value: string; tooltip?: string }) {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
-      <p className="text-sm font-medium text-slate-500">{title}</p>
+      <p className="text-sm font-medium text-slate-500">
+        {title}{tooltip && <InfoTip text={tooltip} />}
+      </p>
       <p className="text-2xl font-bold text-slate-900 mt-1">{value}</p>
     </div>
   );

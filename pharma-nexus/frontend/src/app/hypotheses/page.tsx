@@ -3,6 +3,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
+import {
+  ADJUSTED_SCORE,
+  COMPOSITE_SCORE,
+  NOVELTY_SCORE,
+  LLM_CONFIDENCE,
+  EVIDENCE_STRENGTH,
+  MIN_SCORE_THRESHOLD,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { CancerType, Hypothesis } from "@/types";
 
 type SortField = "adjusted_score" | "composite_score" | "novelty_score" | "created_at";
@@ -85,7 +94,7 @@ export default function HypothesesPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              Sort by
+              Sort by<InfoTip text="Choose which score to rank hypotheses by. Adjusted Score incorporates AI review. Composite Score uses raw evidence only. Novelty Score ranks the most unstudied combinations first." />
             </label>
             <select
               value={sortBy}
@@ -104,7 +113,7 @@ export default function HypothesesPage() {
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              Evidence Strength
+              Evidence Strength<InfoTip text={EVIDENCE_STRENGTH} />
             </label>
             <select
               value={strengthFilter}
@@ -145,7 +154,7 @@ export default function HypothesesPage() {
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              Min Score
+              Min Score<InfoTip text={MIN_SCORE_THRESHOLD} />
             </label>
             <input
               type="number"
@@ -206,13 +215,13 @@ export default function HypothesesPage() {
                   Hypothesis
                 </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-24">
-                  Score
+                  Score<InfoTip text={ADJUSTED_SCORE} />
                 </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-20">
-                  LLM
+                  LLM<InfoTip text={LLM_CONFIDENCE} />
                 </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider w-28">
-                  Strength
+                  Strength<InfoTip text={EVIDENCE_STRENGTH} />
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider w-28">
                   Created

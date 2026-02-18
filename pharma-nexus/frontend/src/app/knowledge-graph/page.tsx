@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
+import { KG_NODES, KG_EDGES, KG_NODE_TYPES, KG_EDGE_TYPES, KG_HOPS, EDGE_TYPE_TOOLTIPS } from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { Drug, CancerType } from "@/types";
 
 // ------------------------------------------------------------------
@@ -298,10 +300,10 @@ export default function KnowledgeGraphPage() {
           </div>
         ) : stats ? (
           <>
-            <MiniStat label="Total Nodes" value={stats.total_nodes.toLocaleString()} />
-            <MiniStat label="Total Edges" value={stats.total_edges.toLocaleString()} />
-            <MiniStat label="Node Types" value={String(Object.keys(stats.nodes).length)} />
-            <MiniStat label="Edge Types" value={String(Object.keys(stats.edges).length)} />
+            <MiniStat label="Total Nodes" value={stats.total_nodes.toLocaleString()} tooltip={KG_NODES} />
+            <MiniStat label="Total Edges" value={stats.total_edges.toLocaleString()} tooltip={KG_EDGES} />
+            <MiniStat label="Node Types" value={String(Object.keys(stats.nodes).length)} tooltip={KG_NODE_TYPES} />
+            <MiniStat label="Edge Types" value={String(Object.keys(stats.edges).length)} tooltip={KG_EDGE_TYPES} />
           </>
         ) : (
           <div className="col-span-4 text-sm text-slate-400">Loading stats...</div>
@@ -484,7 +486,7 @@ export default function KnowledgeGraphPage() {
         {/* Legend */}
         {!loading && graphNodes.length > 0 && (
           <div className="border-t border-slate-100 px-4 py-2 flex flex-wrap gap-4 text-xs text-slate-500">
-            <span className="font-medium">Legend:</span>
+            <span className="font-medium">Legend<InfoTip text="Each color represents a different type of biological entity in the network." />:</span>
             {Object.entries(NODE_COLORS).map(([type, color]) => (
               <span key={type} className="flex items-center gap-1">
                 <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: color }} />
@@ -499,7 +501,7 @@ export default function KnowledgeGraphPage() {
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
         <h2 className="text-sm font-medium text-slate-500 mb-3">Path Finder</h2>
         <p className="text-xs text-slate-400 mb-3">
-          Find all molecular paths connecting a drug to a cancer type (up to 3 hops).
+          Find all molecular paths connecting a drug to a cancer type (up to 3 hops<InfoTip text={KG_HOPS} />).
         </p>
         <div className="flex flex-wrap gap-4 items-end">
           <div className="flex-1 min-w-[180px]">
@@ -565,10 +567,12 @@ export default function KnowledgeGraphPage() {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({ label, value, tooltip }: { label: string; value: string; tooltip?: string }) {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="text-xs font-medium text-slate-500">
+        {label}{tooltip && <InfoTip text={tooltip} />}
+      </p>
       <p className="text-lg font-bold text-slate-900 mt-0.5">{value}</p>
     </div>
   );

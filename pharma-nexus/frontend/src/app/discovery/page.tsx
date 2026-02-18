@@ -3,6 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
+import {
+  PROPOSAL_CONFIDENCE,
+  REASONING_CHAIN,
+  PROPOSAL_NOVELTY,
+  PROPOSAL_STATUS_TOOLTIPS,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 
 interface Proposal {
   id: number;
@@ -100,7 +107,7 @@ export default function DiscoveryPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              Min Confidence (%)
+              Min Confidence (%)<InfoTip text={PROPOSAL_CONFIDENCE} />
             </label>
             <input
               type="number"
@@ -165,6 +172,7 @@ export default function DiscoveryPage() {
                       }`}
                     >
                       {p.status.replace(/_/g, " ")}
+                      {PROPOSAL_STATUS_TOOLTIPS[p.status] && <InfoTip text={PROPOSAL_STATUS_TOOLTIPS[p.status]} />}
                     </span>
                     {p.hypothesis_id && (
                       <Link
@@ -183,7 +191,7 @@ export default function DiscoveryPage() {
                   <div className="text-xl font-bold text-violet-700">
                     {Math.round(p.confidence * 100)}%
                   </div>
-                  <div className="text-xs text-slate-400">confidence</div>
+                  <div className="text-xs text-slate-400">confidence<InfoTip text={PROPOSAL_CONFIDENCE} /></div>
                 </div>
               </div>
 
@@ -196,7 +204,7 @@ export default function DiscoveryPage() {
               {p.transitive_chain.length > 0 && (
                 <div className="mb-3">
                   <div className="text-xs font-medium text-slate-500 mb-1">
-                    Reasoning Chain
+                    Reasoning Chain<InfoTip text={REASONING_CHAIN} />
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {p.transitive_chain.map((step, i) => (
@@ -234,7 +242,7 @@ export default function DiscoveryPage() {
               {/* Novelty */}
               {p.novelty_reasoning && (
                 <div className="mt-2 p-2 bg-amber-50 rounded text-xs text-amber-700">
-                  <span className="font-medium">Why novel: </span>
+                  <span className="font-medium">Why novel<InfoTip text={PROPOSAL_NOVELTY} />: </span>
                   {p.novelty_reasoning}
                 </div>
               )}

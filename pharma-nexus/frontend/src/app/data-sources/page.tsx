@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
+import { RECORDS_PROCESSED } from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { IngestionLog } from "@/types";
 
 // ------------------------------------------------------------------
@@ -162,7 +164,7 @@ export default function DataSourcesPage() {
                   {/* Stats row */}
                   {log && log.status === "completed" && (
                     <div className="flex items-center gap-4 text-xs text-slate-400 mb-3">
-                      <span>{log.records_processed.toLocaleString()} records</span>
+                      <span>{log.records_processed.toLocaleString()} records<InfoTip text={RECORDS_PROCESSED} /></span>
                       {log.completed_at && (
                         <span>{formatTime(log.completed_at)}</span>
                       )}

@@ -2,6 +2,16 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
+import {
+  ADJUSTED_SCORE,
+  LLM_CONFIDENCE,
+  EVIDENCE_STRENGTH,
+  DIMENSION_TOOLTIPS,
+  RECOMMENDATION_TOOLTIPS,
+  ANALYSIS_PIPELINE,
+  ANALYSIS_TYPE_TOOLTIPS,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { Hypothesis, CancerType } from "@/types";
 
 // ------------------------------------------------------------------
@@ -254,7 +264,7 @@ export default function ReportsPage() {
                 <div className="flex items-center gap-2">
                   <StrengthBadge strength={h.evidence_strength} />
                   {h.llm_confidence_score != null && (
-                    <span className="text-xs text-violet-600">{h.llm_confidence_score}% conf</span>
+                    <span className="text-xs text-violet-600">{h.llm_confidence_score}% conf<InfoTip text={LLM_CONFIDENCE} /></span>
                   )}
                 </div>
               </button>
@@ -296,7 +306,7 @@ export default function ReportsPage() {
               {/* Analysis pipeline */}
               <div className="bg-white rounded-lg border border-slate-200 p-5">
                 <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-sm font-semibold text-slate-700">Analysis Pipeline</h4>
+                  <h4 className="text-sm font-semibold text-slate-700">Analysis Pipeline<InfoTip text={ANALYSIS_PIPELINE} /></h4>
                   <button
                     onClick={() => runFullAnalysis(selected.id)}
                     disabled={!!generating[`full-${selected.id}`] || isFullyAnalyzed}
@@ -325,7 +335,7 @@ export default function ReportsPage() {
                         }`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium text-slate-800">{at.label}</span>
+                          <span className="text-sm font-medium text-slate-800">{at.label}{ANALYSIS_TYPE_TOOLTIPS[at.key] && <InfoTip text={ANALYSIS_TYPE_TOOLTIPS[at.key]} />}</span>
                           {done ? (
                             <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">Done</span>
                           ) : (
@@ -381,7 +391,7 @@ export default function ReportsPage() {
               {/* Score dimensions */}
               {selected.dimension_scores && (
                 <div className="bg-white rounded-lg border border-slate-200 p-5">
-                  <h4 className="text-sm font-semibold text-slate-700 mb-3">Evidence Dimensions</h4>
+                  <h4 className="text-sm font-semibold text-slate-700 mb-3">Evidence Dimensions<InfoTip text="Six independent categories of evidence are scored from 0 to 100 and combined into the composite score." /></h4>
                   <div className="space-y-2">
                     {Object.entries(selected.dimension_scores).map(([dim, score]) => (
                       <DimensionBar key={dim} label={dim} score={score} />
@@ -492,6 +502,7 @@ function RecommendationBadge({ rec }: { rec: string }) {
   return (
     <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${styles[rec] ?? "bg-slate-100 text-slate-600"}`}>
       {labels[rec] ?? rec}
+      {RECOMMENDATION_TOOLTIPS[rec] && <InfoTip text={RECOMMENDATION_TOOLTIPS[rec]} />}
     </span>
   );
 }
@@ -499,9 +510,10 @@ function RecommendationBadge({ rec }: { rec: string }) {
 function DimensionBar({ label, score }: { label: string; score: number }) {
   const formatted = label.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   const color = score >= 70 ? "bg-emerald-500" : score >= 40 ? "bg-blue-500" : "bg-amber-500";
+  const dimTip = DIMENSION_TOOLTIPS[label] ?? "";
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-slate-600 w-40 truncate">{formatted}</span>
+      <span className="text-xs text-slate-600 w-40 truncate">{formatted}{dimTip && <InfoTip text={dimTip} />}</span>
       <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(score, 100)}%` }} />
       </div>

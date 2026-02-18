@@ -4,6 +4,17 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { fetchApi } from "@/lib/api";
+import {
+  COMPOSITE_SCORE,
+  ADJUSTED_SCORE,
+  LLM_CONFIDENCE,
+  EVIDENCE_STRENGTH,
+  DIMENSION_TOOLTIPS,
+  EVIDENCE_TYPE_TOOLTIPS,
+  CONFIDENCE_PERCENT,
+  RECOMMENDATION_TOOLTIPS,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { Hypothesis, HypothesisEvidence } from "@/types";
 
 const DIMENSION_LABELS: Record<string, string> = {
@@ -105,8 +116,8 @@ export default function HypothesisDetailPage() {
             </div>
             <div className="text-xs text-slate-400">
               {h.adjusted_score != null && h.adjusted_score !== h.composite_score
-                ? `adjusted (raw ${h.composite_score})`
-                : "/ 100"}
+                ? <span>adjusted<InfoTip text={ADJUSTED_SCORE} /> (raw {h.composite_score})</span>
+                : <span>/ 100<InfoTip text={COMPOSITE_SCORE} /></span>}
             </div>
           </div>
           {h.llm_confidence_score != null && (
@@ -114,7 +125,7 @@ export default function HypothesisDetailPage() {
               <div className="text-xl font-bold text-violet-700">
                 {h.llm_confidence_score}
               </div>
-              <div className="text-xs text-slate-400">LLM confidence</div>
+              <div className="text-xs text-slate-400">LLM confidence<InfoTip text={LLM_CONFIDENCE} /></div>
             </div>
           )}
           <div className="flex flex-col items-center gap-1">
@@ -123,11 +134,12 @@ export default function HypothesisDetailPage() {
                 STRENGTH_COLORS[h.evidence_strength] ?? "bg-slate-100 text-slate-600 border-slate-200"
               }`}
             >
-              {h.evidence_strength}
+              {h.evidence_strength}<InfoTip text={EVIDENCE_STRENGTH} />
             </span>
             {h.llm_recommendation && (
               <span className="text-xs text-slate-500">
                 {h.llm_recommendation.replace(/_/g, " ")}
+                <InfoTip text={RECOMMENDATION_TOOLTIPS[h.llm_recommendation] ?? ""} />
               </span>
             )}
           </div>
@@ -147,6 +159,7 @@ export default function HypothesisDetailPage() {
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5 mb-6">
           <h2 className="text-sm font-medium text-slate-500 mb-4">
             Evidence Dimensions
+            <InfoTip text="Six independent categories of evidence are scored from 0 to 100 and combined into the composite score. Each dimension captures a different type of scientific evidence." />
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {Object.entries(DIMENSION_LABELS).map(([key, label]) => {
@@ -157,6 +170,7 @@ export default function HypothesisDetailPage() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-medium text-slate-600">
                         {label}
+                        {DIMENSION_TOOLTIPS[key] && <InfoTip text={DIMENSION_TOOLTIPS[key]} />}
                       </span>
                       <span className="text-xs font-bold text-slate-800">
                         {score}
@@ -220,11 +234,14 @@ function EvidenceCard({ evidence }: { evidence: HypothesisEvidence }) {
     weak: "text-slate-500 bg-slate-50",
   };
 
+  const evTypeTip = EVIDENCE_TYPE_TOOLTIPS[evidence.evidence_type] ?? "";
+
   return (
     <div className="border border-slate-100 rounded-md p-3">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs font-medium text-slate-500 uppercase">
           {evidence.evidence_type.replace(/_/g, " ")}
+          {evTypeTip && <InfoTip text={evTypeTip} />}
         </span>
         <span
           className={`text-xs px-1.5 py-0.5 rounded ${
@@ -235,6 +252,7 @@ function EvidenceCard({ evidence }: { evidence: HypothesisEvidence }) {
         </span>
         <span className="text-xs text-slate-400 ml-auto">
           confidence: {(evidence.confidence * 100).toFixed(0)}%
+          <InfoTip text={CONFIDENCE_PERCENT} />
         </span>
       </div>
       {evidence.description && (

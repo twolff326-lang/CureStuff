@@ -2,6 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
+import {
+  COST_MODE,
+  COST_MODE_ECONOMY,
+  COST_MODE_STANDARD,
+  COST_MODE_PREMIUM,
+  MIN_SCORE_THRESHOLD,
+} from "@/lib/glossary";
+import InfoTip from "@/components/common/InfoTip";
 import type { CancerType, CostInfo, TaskProgress, TaskStatus } from "@/types";
 
 const STORAGE_KEY = "pharma-nexus-jobs";
@@ -268,7 +276,7 @@ export default function AnalysisPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              Minimum Score Threshold
+              Minimum Score Threshold<InfoTip text={MIN_SCORE_THRESHOLD} />
             </label>
             <input
               type="number"
@@ -281,7 +289,7 @@ export default function AnalysisPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
-              LLM Cost Mode
+              LLM Cost Mode<InfoTip text={COST_MODE} />
             </label>
             <select
               value={costMode}
