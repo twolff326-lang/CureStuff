@@ -425,7 +425,11 @@ class ChEMBLConnector(BaseConnector):
         try:
             resp = await self.http_get(client, url)
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "ChEMBL target resolution failed for %s: %s",
+                target_chembl_id, exc,
+            )
             self._target_cache[target_chembl_id] = ("", "")
             return ("", "")
 
@@ -469,7 +473,11 @@ class ChEMBLConnector(BaseConnector):
         try:
             resp = await self.http_get(client, url)
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "ChEMBL molecule resolution failed for %s: %s",
+                molecule_chembl_id, exc,
+            )
             self._molecule_drugbank_map[molecule_chembl_id] = ""
             return None
 
@@ -497,7 +505,11 @@ class ChEMBLConnector(BaseConnector):
         try:
             resp = await self.http_get(client, url, params=params)
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "ChEMBL molecule search failed for drug '%s': %s",
+                drug_name, exc,
+            )
             return None
 
         molecules = data.get("molecules", [])

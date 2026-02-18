@@ -37,6 +37,17 @@ Entrez.email = settings.ncbi_email or "pharma-nexus@example.com"
 if settings.ncbi_api_key:
     Entrez.api_key = settings.ncbi_api_key
 
+if not settings.ncbi_email:
+    logger.warning(
+        "NCBI_EMAIL is not set — PubMed requests will use a placeholder email. "
+        "NCBI may throttle or reject requests. Set NCBI_EMAIL in your .env file."
+    )
+if not settings.ncbi_api_key:
+    logger.warning(
+        "NCBI_API_KEY is not set — PubMed rate limit is 3 req/sec (vs 10 with a key). "
+        "Get a free key at https://www.ncbi.nlm.nih.gov/account/settings/"
+    )
+
 EFETCH_BATCH_SIZE = 200  # Max per efetch call
 RATE_DELAY = 0.1 if settings.ncbi_api_key else 0.34  # seconds between requests
 
@@ -149,7 +160,8 @@ class PubMedConnector(BaseConnector):
 
     async def _run_phase1(self, session: AsyncSession) -> int:
         """Find literature for drug-cancer pairs with pathway connections."""
-        # Find drug-cancer pairs sharing pathway targets
+        # Find drug-cancer pairs where the cancer's molecular profile shares
+        # a gene with a target in the same pathway as the drug's target.
         pairs_query = text("""
             SELECT DISTINCT d.id AS drug_id, d.name AS drug_name,
                    ct.id AS cancer_type_id, ct.name AS cancer_name,
@@ -157,13 +169,13 @@ class PubMedConnector(BaseConnector):
             FROM drugs d
             JOIN drug_targets dt ON dt.drug_id = d.id
             JOIN pathway_targets pt ON pt.target_id = dt.target_id
-            JOIN cancer_molecular_profiles cmp ON cmp.cancer_type_id IS NOT NULL
-            JOIN cancer_types ct ON ct.id = cmp.cancer_type_id
-            WHERE cmp.gene_symbol IN (
-                SELECT t2.gene_symbol FROM targets t2
-                JOIN pathway_targets pt2 ON pt2.target_id = t2.id
+            JOIN targets t2 ON t2.id IN (
+                SELECT pt2.target_id FROM pathway_targets pt2
                 WHERE pt2.pathway_id = pt.pathway_id
             )
+            JOIN cancer_molecular_profiles cmp
+                ON cmp.gene_symbol = t2.gene_symbol
+            JOIN cancer_types ct ON ct.id = cmp.cancer_type_id
             LIMIT 500
         """)
 
@@ -336,7 +348,7 @@ class PubMedConnector(BaseConnector):
         try:
             return await loop.run_in_executor(None, _do_search)
         except Exception as exc:
-            logger.warning("PubMed search failed: %s (query: %.80s...)", exc, query)
+            logger.error("PubMed search failed: %s (query: %.80s...)", exc, query)
             return []
 
     async def _fetch_papers(

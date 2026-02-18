@@ -212,7 +212,11 @@ class OpenTargetsConnector(BaseConnector):
             )
             resp.raise_for_status()
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "OpenTargets GraphQL request failed for %s: %s",
+                ensembl_id, exc,
+            )
             return []
 
         target_data = data.get("data", {}).get("target")

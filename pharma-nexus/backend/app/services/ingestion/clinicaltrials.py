@@ -220,7 +220,11 @@ class ClinicalTrialsConnector(BaseConnector):
             )
             resp.raise_for_status()
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "ClinicalTrials API request failed for drug '%s': %s",
+                drug_name, exc,
+            )
             return 0
 
         studies = data.get("studies", [])
