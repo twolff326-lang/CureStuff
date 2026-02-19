@@ -300,7 +300,7 @@ function GeneBarChart({
             />
             <Tooltip
               contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12 }}
-              formatter={(value: number) => [value.toFixed(2), "|Z-score|"]}
+              formatter={(value: number | undefined) => [value != null ? value.toFixed(2) : "N/A", "|Z-score|"]}
             />
             <Bar dataKey="zscore" radius={[0, 3, 3, 0]}>
               {data.map((_, i) => (
