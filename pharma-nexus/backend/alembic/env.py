@@ -28,6 +28,8 @@ from app.models import (  # noqa: F401
     ClinicalTrial,
     TrialDrug,
     IngestionLog,
+    GeneDependency,
+    CombinationHypothesis,
 )
 
 config = context.config
