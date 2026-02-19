@@ -7,88 +7,84 @@ import IngestionCard, {
 import { fetchApi } from "@/lib/api";
 
 // ---------------------------------------------------------------
-// Source definitions — sourceKey must match the backend task key
+// Source definitions — grouped by category
 // ---------------------------------------------------------------
 
-const sources: { name: string; sourceKey: string; description: string }[] = [
-  {
-    name: "DrugBank",
-    sourceKey: "drugbank",
-    description: "FDA-approved drug data, mechanisms, targets",
-  },
-  {
-    name: "PubChem",
-    sourceKey: "pubchem",
-    description: "Chemical properties, bioassay results",
-  },
-  {
-    name: "ChEMBL",
-    sourceKey: "chembl",
-    description: "Bioactivity data, binding affinities",
-  },
-  {
-    name: "cBioPortal",
-    sourceKey: "cbioportal",
-    description: "TCGA cancer genomics — mutations, expression, CNA",
-  },
-  {
-    name: "TCGA / GDC",
-    sourceKey: "tcga",
-    description: "Supplementary molecular profiles of 11,000+ tumors",
-  },
-  {
-    name: "COSMIC",
-    sourceKey: "cosmic",
-    description: "Somatic mutations in cancer",
-  },
-  {
-    name: "KEGG",
-    sourceKey: "kegg",
-    description: "Biological pathway maps",
-  },
-  {
-    name: "Reactome",
-    sourceKey: "reactome",
-    description: "Pathway database with molecular details",
-  },
-  {
-    name: "UniProt",
-    sourceKey: "uniprot",
-    description: "Protein function and interaction data",
-  },
-  {
-    name: "PubMed",
-    sourceKey: "literature",
-    description: "Published biomedical literature",
-  },
-  {
-    name: "ClinicalTrials.gov",
-    sourceKey: "clinical_trials",
-    description: "Active and completed trial data",
-  },
-  {
-    name: "STRING",
-    sourceKey: "string",
-    description: "Protein-protein interaction networks",
-  },
-  {
-    name: "OpenTargets",
-    sourceKey: "opentargets",
-    description: "Target-disease association evidence",
-  },
+interface SourceDef {
+  name: string;
+  sourceKey: string;
+  description: string;
+  category: "drugs" | "cancer" | "pathways" | "literature" | "analysis";
+}
+
+const sources: SourceDef[] = [
+  // Drugs
+  { name: "DrugBank", sourceKey: "drugbank", description: "FDA-approved drug data, mechanisms, targets", category: "drugs" },
+  { name: "PubChem", sourceKey: "pubchem", description: "Chemical properties, bioassay results", category: "drugs" },
+  { name: "ChEMBL", sourceKey: "chembl", description: "Bioactivity data, binding affinities", category: "drugs" },
+  // Cancer
+  { name: "cBioPortal", sourceKey: "cbioportal", description: "TCGA cancer genomics — mutations, expression, CNA", category: "cancer" },
+  { name: "TCGA / GDC", sourceKey: "tcga", description: "Supplementary molecular profiles of 11,000+ tumors", category: "cancer" },
+  { name: "COSMIC", sourceKey: "cosmic", description: "Somatic mutations in cancer", category: "cancer" },
+  // Pathways
+  { name: "KEGG", sourceKey: "kegg", description: "Biological pathway maps", category: "pathways" },
+  { name: "Reactome", sourceKey: "reactome", description: "Pathway database with molecular details", category: "pathways" },
+  { name: "STRING", sourceKey: "string", description: "Protein-protein interaction networks", category: "pathways" },
+  { name: "UniProt", sourceKey: "uniprot", description: "Protein function and interaction data", category: "pathways" },
+  { name: "OpenTargets", sourceKey: "opentargets", description: "Target-disease association evidence", category: "pathways" },
+  // Literature
+  { name: "PubMed", sourceKey: "literature", description: "Published biomedical literature", category: "literature" },
+  { name: "ClinicalTrials.gov", sourceKey: "clinical_trials", description: "Active and completed trial data", category: "literature" },
+  // Computed pipelines
+  { name: "Expression Analysis", sourceKey: "full_expression_analysis", description: "Differential expression, pathway activity, drug scores", category: "analysis" },
+  { name: "Knowledge Graph", sourceKey: "knowledge_graph", description: "Sync all data to Neo4j for graph queries", category: "analysis" },
+];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  drugs: "Drug Databases",
+  cancer: "Cancer Genomics",
+  pathways: "Pathways & Interactions",
+  literature: "Literature & Trials",
+  analysis: "Computed Pipelines",
+};
+
+const CATEGORY_ORDER = ["drugs", "cancer", "pathways", "literature", "analysis"];
+
+const BATCH_ACTIONS: { label: string; sourceKey: string }[] = [
+  { label: "All Drugs", sourceKey: "all_drugs" },
+  { label: "All Cancer Data", sourceKey: "all_cancer_data" },
+  { label: "All Pathways", sourceKey: "all_pathways" },
+  { label: "All Literature", sourceKey: "all_literature" },
 ];
 
 // ---------------------------------------------------------------
-// Page component
+// Types
 // ---------------------------------------------------------------
 
 interface LiveStatusResponse {
   sources: Record<string, SourceStatus>;
 }
 
+interface LogEntry {
+  id: number;
+  source: string;
+  task_type: string;
+  status: string;
+  records_processed: number;
+  errors: unknown[] | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+// ---------------------------------------------------------------
+// Page component
+// ---------------------------------------------------------------
+
 export default function DataSourcesPage() {
   const [statuses, setStatuses] = useState<Record<string, SourceStatus>>({});
   const [startingSource, setStartingSource] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
 
   // Track whether any source is currently running so we can poll faster
   const anyRunning = Object.values(statuses).some(
@@ -107,10 +103,22 @@ export default function DataSourcesPage() {
     }
   }, []);
 
+  const fetchLogs = useCallback(async () => {
+    try {
+      const data = await fetchApi<{ logs: LogEntry[] }>(
+        "/api/ingestion/logs?per_page=10",
+      );
+      setRecentLogs(data.logs);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Initial fetch
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    fetchLogs();
+  }, [fetchStatus, fetchLogs]);
 
   // Poll: 1.5 s while running, 10 s when idle
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -118,15 +126,19 @@ export default function DataSourcesPage() {
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     const ms = anyRunning ? 1500 : 10000;
-    intervalRef.current = setInterval(fetchStatus, ms);
+    intervalRef.current = setInterval(() => {
+      fetchStatus();
+      fetchLogs();
+    }, ms);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [anyRunning, fetchStatus]);
+  }, [anyRunning, fetchStatus, fetchLogs]);
 
   // ---- Start ingestion ----------------------------------------
   const handleStart = async (sourceKey: string) => {
     setStartingSource(sourceKey);
+    setError(null);
     try {
       await fetchApi("/api/ingestion/start", {
         method: "POST",
@@ -134,8 +146,11 @@ export default function DataSourcesPage() {
       });
       // Immediately refetch to pick up the new "running" status
       await fetchStatus();
+      await fetchLogs();
     } catch (err) {
-      console.error("Failed to start ingestion:", err);
+      setError(
+        `Failed to start ingestion for "${sourceKey}". Is the backend running?`
+      );
     } finally {
       setStartingSource(null);
     }
@@ -153,12 +168,35 @@ export default function DataSourcesPage() {
     (s) => s.status === "completed",
   ).length;
 
+  // Group sources by category
+  const grouped = CATEGORY_ORDER.map((cat) => ({
+    category: cat,
+    label: CATEGORY_LABELS[cat],
+    sources: sources.filter((s) => s.category === cat),
+  }));
+
   return (
     <div>
       <h1 className="text-3xl font-bold text-slate-900 mb-2">Data Sources</h1>
       <p className="text-slate-500 mb-6">
         Manage data ingestion from public biomedical databases.
       </p>
+
+      {/* Error banner */}
+      {error && (
+        <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="flex-1 text-sm text-red-700">{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-sm font-medium text-red-500 hover:text-red-700"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Aggregate status strip */}
       <div className="mb-6 flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-5 py-3 shadow-sm">
@@ -179,19 +217,105 @@ export default function DataSourcesPage() {
         <Stat label="Sources" value={String(sources.length)} />
       </div>
 
-      {/* Card grid */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {sources.map((source) => (
-          <IngestionCard
-            key={source.sourceKey}
-            name={source.name}
-            sourceKey={source.sourceKey}
-            description={source.description}
-            status={statuses[source.sourceKey] ?? null}
-            onStart={handleStart}
-            starting={startingSource === source.sourceKey}
-          />
-        ))}
+      {/* Source cards by category */}
+      {grouped.map((group) => (
+        <div key={group.category} className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+            {group.label}
+          </h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {group.sources.map((source) => (
+              <IngestionCard
+                key={source.sourceKey}
+                name={source.name}
+                sourceKey={source.sourceKey}
+                description={source.description}
+                status={statuses[source.sourceKey] ?? null}
+                onStart={handleStart}
+                starting={startingSource === source.sourceKey}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Batch ingestion actions */}
+      <div className="mb-8 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-sm font-medium text-slate-500 mb-2">Batch Ingestion</h2>
+        <p className="text-xs text-slate-400 mb-3">
+          Run entire categories at once. Each source runs as a separate async Celery task.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          {BATCH_ACTIONS.map((action) => (
+            <button
+              key={action.sourceKey}
+              onClick={() => handleStart(action.sourceKey)}
+              disabled={startingSource === action.sourceKey}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 active:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {startingSource === action.sourceKey
+                ? `${action.label}...`
+                : action.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent ingestion activity table */}
+      <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="text-sm font-medium text-slate-500">
+            Recent Ingestion Activity
+          </h2>
+          <button
+            onClick={() => { fetchStatus(); fetchLogs(); }}
+            className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-200"
+          >
+            Refresh
+          </button>
+        </div>
+        {recentLogs.length === 0 ? (
+          <div className="px-5 py-8 text-center text-sm text-slate-400">
+            No ingestion runs yet. Click a source above to start.
+          </div>
+        ) : (
+          <table className="min-w-full divide-y divide-slate-100">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Source
+                </th>
+                <th className="px-4 py-2 text-center text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Status
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Records
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Time
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {recentLogs.map((log) => (
+                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-2 text-sm text-slate-700">
+                    {log.source}
+                  </td>
+                  <td className="px-4 py-2 text-center">
+                    <LogStatusBadge status={log.status} />
+                  </td>
+                  <td className="px-4 py-2 text-right text-sm tabular-nums text-slate-600">
+                    {log.records_processed.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2 text-right text-xs text-slate-400">
+                    {log.started_at ? formatTimeAgo(log.started_at) : "\u2014"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -228,4 +352,37 @@ function Stat({
 
 function Divider() {
   return <div className="hidden h-8 w-px bg-slate-200 sm:block" />;
+}
+
+function LogStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    completed: "bg-green-100 text-green-700",
+    running: "bg-blue-100 text-blue-700",
+    failed: "bg-red-100 text-red-700",
+  };
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+        styles[status] ?? "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function formatTimeAgo(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "Just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return d.toLocaleDateString();
+  } catch {
+    return isoString;
+  }
 }

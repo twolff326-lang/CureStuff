@@ -7,31 +7,23 @@ Each task:
   4. Is idempotent — re-running produces the same result via upserts
 """
 
-import asyncio
 import logging
-from datetime import datetime, timezone
 
 from celery import chord
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async, task_session
 
 logger = logging.getLogger(__name__)
 
 
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 async def _run_connector(connector_class, **kwargs):
-    """Instantiate and run a connector, returning its result summary."""
-    from app.database import async_session_factory
+    """Instantiate and run a connector, returning its result summary.
 
-    async with async_session_factory() as session:
+    Uses task_session() to create a task-local engine + session bound
+    to the current event loop.
+    """
+    async with task_session() as session:
         connector = connector_class(db_session=session, **kwargs)
         return await connector.run()
 
@@ -47,7 +39,7 @@ def ingest_drugbank(self, xml_path=None):
         if xml_path:
             kwargs["xml_path"] = xml_path
 
-        result = _run_async(_run_connector(DrugBankConnector, **kwargs))
+        result = run_async(_run_connector(DrugBankConnector, **kwargs))
         logger.info(
             "DrugBank ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -66,7 +58,7 @@ def ingest_pubchem(self):
     try:
         from app.services.ingestion.pubchem import PubChemConnector
 
-        result = _run_async(_run_connector(PubChemConnector))
+        result = run_async(_run_connector(PubChemConnector))
         logger.info(
             "PubChem ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -85,7 +77,7 @@ def ingest_chembl(self):
     try:
         from app.services.ingestion.chembl import ChEMBLConnector
 
-        result = _run_async(_run_connector(ChEMBLConnector))
+        result = run_async(_run_connector(ChEMBLConnector))
         logger.info(
             "ChEMBL ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -145,7 +137,7 @@ def ingest_cbioportal(self):
     try:
         from app.services.ingestion.cbioportal import CBioPortalConnector
 
-        result = _run_async(_run_connector(CBioPortalConnector))
+        result = run_async(_run_connector(CBioPortalConnector))
         logger.info(
             "cBioPortal ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -164,7 +156,7 @@ def ingest_tcga(self):
     try:
         from app.services.ingestion.tcga import TCGAConnector
 
-        result = _run_async(_run_connector(TCGAConnector))
+        result = run_async(_run_connector(TCGAConnector))
         logger.info(
             "TCGA/GDC ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -187,7 +179,7 @@ def ingest_cosmic(self, census_tsv_path=None):
         if census_tsv_path:
             kwargs["census_tsv_path"] = census_tsv_path
 
-        result = _run_async(_run_connector(COSMICConnector, **kwargs))
+        result = run_async(_run_connector(COSMICConnector, **kwargs))
         logger.info(
             "COSMIC ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -251,7 +243,7 @@ def ingest_kegg(self):
     try:
         from app.services.ingestion.kegg import KEGGConnector
 
-        result = _run_async(_run_connector(KEGGConnector))
+        result = run_async(_run_connector(KEGGConnector))
         logger.info(
             "KEGG ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -270,7 +262,7 @@ def ingest_reactome(self):
     try:
         from app.services.ingestion.reactome import ReactomeConnector
 
-        result = _run_async(_run_connector(ReactomeConnector))
+        result = run_async(_run_connector(ReactomeConnector))
         logger.info(
             "Reactome ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -289,7 +281,7 @@ def ingest_string(self):
     try:
         from app.services.ingestion.string_db import STRINGConnector
 
-        result = _run_async(_run_connector(STRINGConnector))
+        result = run_async(_run_connector(STRINGConnector))
         logger.info(
             "STRING ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -308,7 +300,7 @@ def ingest_uniprot(self):
     try:
         from app.services.ingestion.uniprot import UniProtConnector
 
-        result = _run_async(_run_connector(UniProtConnector))
+        result = run_async(_run_connector(UniProtConnector))
         logger.info(
             "UniProt ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -327,7 +319,7 @@ def ingest_opentargets(self):
     try:
         from app.services.ingestion.opentargets import OpenTargetsConnector
 
-        result = _run_async(_run_connector(OpenTargetsConnector))
+        result = run_async(_run_connector(OpenTargetsConnector))
         logger.info(
             "OpenTargets ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -409,7 +401,7 @@ def ingest_literature(self, phase="all"):
     try:
         from app.services.ingestion.pubmed import PubMedConnector
 
-        result = _run_async(_run_connector(PubMedConnector, phase=phase))
+        result = run_async(_run_connector(PubMedConnector, phase=phase))
         logger.info(
             "PubMed ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -428,7 +420,7 @@ def ingest_clinical_trials(self):
     try:
         from app.services.ingestion.clinicaltrials import ClinicalTrialsConnector
 
-        result = _run_async(_run_connector(ClinicalTrialsConnector))
+        result = run_async(_run_connector(ClinicalTrialsConnector))
         logger.info(
             "ClinicalTrials.gov ingestion complete: %d records, %d errors",
             result["records_processed"], result["errors_count"],
@@ -456,11 +448,10 @@ def generate_embeddings(self):
     try:
 
         async def _generate():
-            from app.database import async_session_factory
             from app.services.embedding import EmbeddingService
 
             svc = EmbeddingService()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 lit_count = await svc.embed_literature(session)
                 target_count = await svc.embed_targets(session)
                 drug_count = await svc.embed_drugs(session)
@@ -471,7 +462,7 @@ def generate_embeddings(self):
                     "drugs_embedded": drug_count,
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info("Embedding generation complete: %s", result)
         return {"records_processed": sum(result.values()), "errors_count": 0, **result}
 
@@ -501,16 +492,15 @@ def analyze_literature_batch(self, pmid_list=None, limit=1000):
     try:
 
         async def _analyze():
-            from app.database import async_session_factory
             from app.services.literature_analyzer import LiteratureAnalyzer
 
             analyzer = LiteratureAnalyzer()
-            async with async_session_factory() as session:
+            async with task_session() as session:
                 return await analyzer.analyze_batch(
                     session, pmid_list=pmid_list, limit=limit
                 )
 
-        result = _run_async(_analyze())
+        result = run_async(_analyze())
         logger.info(
             "Literature analysis complete: %d analyzed, %d failed",
             result["analyzed"], result["failed"],
@@ -587,17 +577,16 @@ def sync_knowledge_graph(self):
     try:
 
         async def _sync():
-            from app.database import async_session_factory
             from app.services.knowledge_graph import KnowledgeGraphService
 
             kg = KnowledgeGraphService()
             try:
-                async with async_session_factory() as session:
+                async with task_session() as session:
                     return await kg.full_sync(session)
             finally:
                 await kg.close()
 
-        result = _run_async(_sync())
+        result = run_async(_sync())
         logger.info("Knowledge graph sync complete: %s", result)
         return {
             "records_processed": result.get("total_nodes", 0) + result.get("total_edges", 0),
