@@ -25,6 +25,7 @@ torch==2.2.0
 numpy==1.26.4
 scipy==1.12.0
 scikit-learn==1.4.0
+statsmodels==0.14.1
 pandas==2.2.0
 
 # HTTP clients
