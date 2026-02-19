@@ -182,6 +182,35 @@ async def get_ingestion_status(
     }
 
 
+@router.post("/preflight")
+async def run_preflight_checks():
+    """Probe every external data source API with a single lightweight request.
+
+    Returns connectivity status, response time, and sample data for each
+    source — lets you verify all APIs are reachable and returning data
+    before committing to a full ingestion run.
+    """
+    from app.services.ingestion.preflight import run_preflight_checks as _run
+
+    results = await _run()
+
+    total = len(results)
+    reachable = sum(1 for r in results if r["reachable"])
+    has_data = sum(1 for r in results if r["has_data"])
+    failed = sum(1 for r in results if r["error"])
+
+    return {
+        "summary": {
+            "total_sources": total,
+            "reachable": reachable,
+            "returning_data": has_data,
+            "failed": failed,
+            "all_ok": has_data == total,
+        },
+        "results": results,
+    }
+
+
 @router.get("/record-counts")
 async def get_record_counts(
     db: AsyncSession = Depends(get_db),

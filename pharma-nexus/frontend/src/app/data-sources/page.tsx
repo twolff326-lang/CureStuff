@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import IngestionCard, {
   type SourceStatus,
 } from "@/components/ingestion/IngestionCard";
+import PreflightPanel from "@/components/ingestion/PreflightPanel";
 import { fetchApi } from "@/lib/api";
 
 // ---------------------------------------------------------------
@@ -216,6 +217,9 @@ export default function DataSourcesPage() {
         <Divider />
         <Stat label="Sources" value={String(sources.length)} />
       </div>
+
+      {/* Preflight API connectivity check */}
+      <PreflightPanel />
 
       {/* Source cards by category */}
       {grouped.map((group) => (
