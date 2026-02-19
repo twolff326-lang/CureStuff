@@ -64,7 +64,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pharma-nexus-backend
-    command: bash -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: bash -c "python scripts/fix_alembic_version.py; alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
       - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}

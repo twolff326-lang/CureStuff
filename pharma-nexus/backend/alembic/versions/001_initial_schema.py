@@ -1,6 +1,6 @@
 """Initial schema with all core tables and pgvector extension.
 
-Revision ID: 001_initial
+Revision ID: 001
 Revises: None
 Create Date: 2026-02-16
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "001_initial"
+revision: str = "001"
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
