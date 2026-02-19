@@ -515,6 +515,12 @@ def _serialize_hypothesis(h: Hypothesis) -> dict:
             "safety": h.safety_score,
             "novelty": h.novelty_score,
         },
+        "statistical": {
+            "p_value": h.p_value,
+            "fdr_adjusted_p_value": h.fdr_adjusted_p_value,
+            "confidence_interval": h.confidence_interval,
+            "scoring_method_version": h.scoring_method_version,
+        },
         "status": h.status,
         "created_at": h.created_at.isoformat() if h.created_at else None,
         "updated_at": h.updated_at.isoformat() if h.updated_at else None,

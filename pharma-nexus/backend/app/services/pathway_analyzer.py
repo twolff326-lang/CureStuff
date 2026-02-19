@@ -4,6 +4,12 @@ Analyzes pathway connections between drugs and cancers to identify
 mechanistic connections for drug repurposing. This is the CONNECTIVE
 TISSUE that links drugs to cancers through biological pathways.
 
+Statistical methods:
+  - Fisher's exact test for pathway co-enrichment significance
+  - Hypergeometric test for gene set enrichment in pathways
+  - Benjamini-Hochberg FDR correction across all tested pathways
+  - Effect size measures (odds ratio, fold enrichment, phi coefficient)
+
 Methods:
   - get_pathway_genes: All genes in a pathway
   - get_gene_pathways: All pathways a gene participates in (with hierarchy)
@@ -13,6 +19,7 @@ Methods:
 """
 
 import logging
+import math
 from collections import deque
 from typing import Any
 
@@ -24,6 +31,12 @@ from app.models.drug import Drug, DrugTarget
 from app.models.mutation import Mutation
 from app.models.pathway import Pathway, PathwayTarget
 from app.models.target import ProteinInteraction, Target
+from app.services.statistical_tests import (
+    benjamini_hochberg,
+    compute_effect_size,
+    fishers_exact_pathway,
+    hypergeometric_enrichment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -250,39 +263,89 @@ class PathwayAnalyzer:
                     if gene not in info["cancer_altered_genes_in_pathway"]:
                         info["cancer_altered_genes_in_pathway"].append(gene)
 
-        # Step 5: Identify shared pathways and compute significance
+        # Step 5: Identify shared pathways and compute STATISTICAL significance
+        # Uses Fisher's exact test (not heuristic scores) to determine if
+        # co-occurrence of drug targets and cancer genes in a pathway is
+        # more than expected by chance.
         shared_pathways = []
+        raw_p_values = []  # For FDR correction across all pathways
 
         for pid, info in drug_pathway_map.items():
             if not info["cancer_altered_genes_in_pathway"]:
                 continue
 
-            # Get pathway size
-            pathway_genes = await self.get_pathway_genes(pid)
-            pathway_size = max(len(pathway_genes), 1)
+            # Get pathway size (genes in this pathway)
+            pathway_genes_list = await self.get_pathway_genes(pid)
+            pathway_genes_set = set(pathway_genes_list)
+            pathway_size = max(len(pathway_genes_set), 1)
 
-            # Compute significance based on overlap fraction and pathway size
             drug_in_pw = len(info["drug_targets_in_pathway"])
             cancer_in_pw = len(info["cancer_altered_genes_in_pathway"])
             overlap_genes = set(info["drug_targets_in_pathway"]) & set(
                 info["cancer_altered_genes_in_pathway"]
             )
 
-            # Smaller pathways with overlap are more significant
-            fraction = (drug_in_pw + cancer_in_pw) / max(pathway_size, 1)
-            size_factor = min(1.0, 50 / max(pathway_size, 1))
-            direct_bonus = 0.3 if overlap_genes else 0.0
-            significance = min(fraction * 0.5 + size_factor * 0.3 + direct_bonus, 1.0)
+            # Fisher's exact test: is co-occurrence of drug targets and
+            # cancer genes in this pathway statistically significant?
+            fisher_result = fishers_exact_pathway(
+                drug_targets_in_pathway=drug_in_pw,
+                cancer_genes_in_pathway=cancer_in_pw,
+                pathway_size=pathway_size,
+                total_genome_size=20000,
+            )
+
+            # Hypergeometric test: are drug targets enriched in this
+            # pathway beyond what's expected given genome background?
+            hyper_result = hypergeometric_enrichment(
+                k=drug_in_pw,
+                K=len(drug_target_genes),
+                n=pathway_size,
+                N=20000,
+            )
+
+            # Effect size measures
+            effect_sizes = compute_effect_size(
+                drug_targets=drug_target_genes,
+                cancer_genes=cancer_genes,
+                pathway_genes=pathway_genes_set,
+                genome_size=20000,
+            )
+
+            # Use the more conservative p-value
+            combined_p = max(fisher_result["p_value"], hyper_result["p_value"])
+            raw_p_values.append(combined_p)
+
+            # Convert p-value to a 0-1 significance score for backward compatibility
+            # -log10(p) capped at 10, then normalized
+            neg_log_p = -math.log10(max(combined_p, 1e-10))
+            significance = min(neg_log_p / 10.0, 1.0)
 
             info["overlap_significance"] = round(significance, 3)
             info["pathway_size"] = pathway_size
             info["direct_overlap_genes"] = list(overlap_genes)
+            info["statistical_tests"] = {
+                "fishers_exact": fisher_result,
+                "hypergeometric": hyper_result,
+                "combined_p_value": combined_p,
+                "effect_sizes": effect_sizes,
+            }
             shared_pathways.append(info)
 
-        # Sort by significance descending
-        shared_pathways.sort(key=lambda x: x["overlap_significance"], reverse=True)
+        # Apply Benjamini-Hochberg FDR correction across all tested pathways
+        if raw_p_values:
+            fdr_result = benjamini_hochberg(raw_p_values, alpha=0.05)
+            for i, pw in enumerate(shared_pathways):
+                pw["statistical_tests"]["fdr_adjusted_p"] = fdr_result["adjusted_p_values"][i]
+                pw["statistical_tests"]["fdr_significant"] = fdr_result["significant_mask"][i]
+        else:
+            fdr_result = {"n_significant": 0}
 
-        # Compute overall overlap score (0-100)
+        # Sort by combined p-value ascending (most significant first)
+        shared_pathways.sort(
+            key=lambda x: x["statistical_tests"]["combined_p_value"]
+        )
+
+        # Compute overall overlap score (0-100) using statistical evidence
         total_drug_pathways = len(drug_pathway_map)
         total_cancer_pathways = len(cancer_pathway_ids)
         shared_count = len(shared_pathways)
@@ -290,12 +353,23 @@ class PathwayAnalyzer:
         if shared_count == 0:
             overlap_score = 0
         else:
-            fraction_score = (shared_count / max(total_drug_pathways, total_cancer_pathways, 1)) * 40
-            top_sig = sum(
-                pw["overlap_significance"] for pw in shared_pathways[:5]
-            ) / min(len(shared_pathways), 5)
-            significance_score = top_sig * 60
-            overlap_score = min(round(fraction_score + significance_score), 100)
+            # Score based on: number of FDR-significant pathways, best p-values,
+            # and effect sizes — not arbitrary fractions
+            n_fdr_sig = fdr_result.get("n_significant", 0)
+
+            # Component 1: Fraction of shared pathways that are FDR-significant (0-40)
+            sig_fraction = n_fdr_sig / shared_count if shared_count > 0 else 0
+            sig_component = sig_fraction * 40
+
+            # Component 2: Best p-value strength (0-35)
+            best_p = shared_pathways[0]["statistical_tests"]["combined_p_value"]
+            p_component = min(-math.log10(max(best_p, 1e-20)) / 20.0, 1.0) * 35
+
+            # Component 3: Effect size of top pathway (0-25)
+            top_effect = shared_pathways[0]["statistical_tests"]["effect_sizes"]
+            effect_component = min(top_effect.get("phi_coefficient", 0) * 2.5, 1.0) * 25
+
+            overlap_score = min(round(sig_component + p_component + effect_component), 100)
 
         return {
             "shared_pathways": shared_pathways,
@@ -303,6 +377,13 @@ class PathwayAnalyzer:
             "total_cancer_altered_pathways": total_cancer_pathways,
             "shared_count": shared_count,
             "overlap_score": overlap_score,
+            "n_fdr_significant": fdr_result.get("n_significant", 0),
+            "statistical_summary": {
+                "total_pathways_tested": len(raw_p_values),
+                "n_fdr_significant_005": fdr_result.get("n_significant", 0),
+                "fdr_method": "benjamini_hochberg",
+                "enrichment_test": "fishers_exact + hypergeometric",
+            },
         }
 
     async def get_network_distance(

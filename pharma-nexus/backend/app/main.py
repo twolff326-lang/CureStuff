@@ -15,6 +15,7 @@ from app.config import settings
 from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
     cancer, pathways, literature, clinical_trials, llm_analysis,
+    validation,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,9 @@ app.include_router(literature.router, tags=["literature"])
 app.include_router(clinical_trials.router, tags=["clinical_trials"])
 app.include_router(
     llm_analysis.router, prefix="/api/llm-analysis", tags=["llm-analysis"]
+)
+app.include_router(
+    validation.router, prefix="/api/validation", tags=["validation"]
 )
 
 

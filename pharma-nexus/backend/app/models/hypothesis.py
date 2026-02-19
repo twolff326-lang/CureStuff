@@ -37,6 +37,10 @@ class Hypothesis(Base):
     clinical_evidence_score = Column(Float)
     safety_score = Column(Float)
     novelty_score = Column(Float)
+    p_value = Column(Float, comment="Permutation-based p-value against null distribution")
+    fdr_adjusted_p_value = Column(Float, comment="BH FDR-corrected p-value")
+    confidence_interval = Column(JSONB, comment="Bootstrap 95% CI for composite score")
+    scoring_method_version = Column(String(50), default="v2_statistical")
     status = Column(String(20), nullable=False, default="generated", index=True)
     critique = Column(JSONB)
     reviewer_notes = Column(Text)
@@ -88,4 +92,26 @@ class HypothesisEvidence(Base):
         Index(
             "ix_hypothesis_evidence_raw_data", "raw_data", postgresql_using="gin"
         ),
+    )
+
+
+class ValidationResult(Base):
+    """Stores results of validation runs for tracking scoring performance over time."""
+    __tablename__ = "validation_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_date = Column(DateTime, server_default=func.now(), nullable=False)
+    validation_type = Column(String(50), nullable=False)
+    scoring_method_version = Column(String(50), nullable=False)
+    n_hypotheses = Column(Integer, nullable=False)
+    n_ground_truth_matched = Column(Integer)
+    roc_auc = Column(Float)
+    pr_auc = Column(Float)
+    mean_rank_percentile = Column(Float)
+    brier_score = Column(Float)
+    results = Column(JSONB, nullable=False)
+    weights_used = Column(JSONB)
+
+    __table_args__ = (
+        Index("ix_validation_results_type_date", "validation_type", "run_date"),
     )
