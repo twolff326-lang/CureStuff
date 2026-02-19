@@ -4,9 +4,14 @@
 Pharma-Nexus: a drug repurposing discovery platform. Identifies existing FDA-approved drugs that may work against cancer by combining data from PubChem, ChEMBL, and other biomedical sources.
 
 ## Git workflow
-- Do NOT create new branches. Always work on the existing branch (check with `git branch` first).
-- Pull latest changes before starting work: `git pull origin <current-branch>`
-- Commit and push to the current branch directly.
+
+> **STRICT BRANCH POLICY — NO EXCEPTIONS**
+>
+> **NEVER create new branches.** All work — every commit, every feature, every fix — MUST go on the existing branch `add-ingestion-status-bar-dEgae`. Do NOT use `git checkout -b`, `git branch`, `git switch -c`, or any other branch-creation command. There is only one development branch and it is `add-ingestion-status-bar-dEgae`.
+
+- Always confirm you are on `add-ingestion-status-bar-dEgae` before making changes (`git branch`).
+- Pull latest changes before starting work: `git pull origin add-ingestion-status-bar-dEgae`
+- Commit and push to `add-ingestion-status-bar-dEgae` directly. No PRs to other branches.
 - Never force-push.
 
 ## Project structure
