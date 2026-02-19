@@ -76,6 +76,18 @@ const BAR_COLORS: Record<string, string> = {
   weak: "#94a3b8",
 };
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function downloadBlob(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------
@@ -313,6 +325,36 @@ export default function TallulaPage() {
               </ResponsiveContainer>
             </div>
           )}
+
+          {/* Export buttons */}
+          <div className="mb-6 flex flex-wrap gap-2">
+            <button
+              onClick={() => {
+                const ts = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+                downloadBlob(
+                  JSON.stringify(result, null, 2),
+                  `tallula_run_${result.run_id}_${ts}.json`,
+                  "application/json",
+                );
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+              Export JSON
+            </button>
+            <a
+              href={`${API_URL}/api/tallula/runs/${result.run_id}/export?format=csv`}
+              download
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+              Export CSV
+            </a>
+          </div>
 
           {/* Discovery list */}
           <div className="mb-4 flex items-center justify-between">
