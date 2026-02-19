@@ -17,6 +17,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     networks:
       - pharma-net
 
@@ -25,11 +26,14 @@ services:
     container_name: pharma-nexus-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     networks:
       - pharma-net
 
@@ -51,6 +55,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
     networks:
       - pharma-net
 
@@ -92,6 +97,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
     networks:
       - pharma-net
 
@@ -120,6 +126,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - pharma-net
 
@@ -147,11 +154,13 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
     networks:
       - pharma-net
 
 volumes:
   postgres_data:
+  redis_data:
   neo4j_data:
 
 networks:

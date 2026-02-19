@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/common/Sidebar";
+import { ToastProvider } from "@/components/common/Toast";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -16,12 +17,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <div className="flex h-screen">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto p-8">{children}</main>
-        </div>
+        <ToastProvider>
+          <div className="flex h-screen">
+            <Sidebar />
+            <main className="flex-1 overflow-y-auto p-4 pt-16 md:p-8 md:pt-8">
+              {children}
+            </main>
+          </div>
+        </ToastProvider>
       </body>
     </html>
   );

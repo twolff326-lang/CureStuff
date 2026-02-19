@@ -100,8 +100,13 @@ export default function KnowledgeGraphPage() {
       return;
     }
 
-    const width = 800;
-    const height = 500;
+    const container = canvasRef.current?.parentElement;
+    const width = container?.clientWidth || 800;
+    const height = Math.min(Math.max(width * 0.55, 350), 600);
+    if (canvasRef.current) {
+      canvasRef.current.width = width;
+      canvasRef.current.height = height;
+    }
     const centerX = width / 2;
     const centerY = height / 2;
 
@@ -272,21 +277,21 @@ export default function KnowledgeGraphPage() {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold text-slate-900 mb-2">
+      <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
         Knowledge Graph
       </h1>
-      <p className="text-slate-500 mb-6">
+      <p className="text-slate-500 dark:text-slate-400 mb-6">
         Explore drug-target-pathway-cancer relationships.
       </p>
 
       {/* Graph stats */}
       {graphStats && (
-        <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-5 py-3 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-5 py-3 shadow-sm">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
               Total Nodes
             </p>
-            <p className="text-lg font-bold tabular-nums text-slate-900">
+            <p className="text-lg font-bold tabular-nums text-slate-900 dark:text-white">
               {graphStats.total_nodes.toLocaleString()}
             </p>
           </div>
@@ -295,7 +300,7 @@ export default function KnowledgeGraphPage() {
             <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
               Total Edges
             </p>
-            <p className="text-lg font-bold tabular-nums text-slate-900">
+            <p className="text-lg font-bold tabular-nums text-slate-900 dark:text-white">
               {graphStats.total_edges.toLocaleString()}
             </p>
           </div>
@@ -305,7 +310,7 @@ export default function KnowledgeGraphPage() {
               <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                 {type}
               </p>
-              <p className="text-lg font-bold tabular-nums text-slate-900">
+              <p className="text-lg font-bold tabular-nums text-slate-900 dark:text-white">
                 {count.toLocaleString()}
               </p>
             </div>
@@ -367,7 +372,7 @@ export default function KnowledgeGraphPage() {
       )}
 
       {/* Canvas */}
-      <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <span className="inline-block h-6 w-6 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600 mr-2" />
@@ -384,8 +389,7 @@ export default function KnowledgeGraphPage() {
               width={800}
               height={500}
               onMouseMove={handleMouseMove}
-              className="w-full"
-              style={{ maxHeight: 500 }}
+              className="w-full cursor-crosshair"
             />
             {/* Legend */}
             <div className="absolute bottom-3 right-3 rounded-md bg-white/90 border border-slate-200 px-3 py-2 text-xs">

@@ -6,6 +6,7 @@ const config: Config = {
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
   ],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
@@ -27,6 +28,7 @@ const config: Config = {
         shimmer: "shimmer 2s infinite linear",
         "progress-indeterminate":
           "progress-indeterminate 1.5s infinite ease-in-out",
+        "slide-up": "slide-up 0.3s ease-out",
       },
       keyframes: {
         shimmer: {
@@ -37,6 +39,10 @@ const config: Config = {
           "0%": { width: "15%", marginLeft: "0%" },
           "50%": { width: "40%", marginLeft: "30%" },
           "100%": { width: "15%", marginLeft: "85%" },
+        },
+        "slide-up": {
+          "0%": { transform: "translateY(16px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
         },
       },
     },
