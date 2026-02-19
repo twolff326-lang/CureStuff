@@ -22,6 +22,7 @@ export interface DimensionScores {
   clinical_evidence: number;
   safety: number;
   novelty: number;
+  causal_dependency: number;
 }
 
 export interface Hypothesis {

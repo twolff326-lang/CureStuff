@@ -514,6 +514,7 @@ def _serialize_hypothesis(h: Hypothesis) -> dict:
             "clinical_evidence": h.clinical_evidence_score,
             "safety": h.safety_score,
             "novelty": h.novelty_score,
+            "causal_dependency": h.causal_dependency_score,
         },
         "statistical": {
             "p_value": h.p_value,

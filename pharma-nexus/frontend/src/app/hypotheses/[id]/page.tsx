@@ -53,6 +53,11 @@ const DIMENSION_META: Record<
     description: "How novel this repurposing idea is (inverse of existing evidence)",
     color: "#f43f5e",
   },
+  causal_dependency: {
+    label: "Causal Dep.",
+    description: "DepMap CRISPR evidence that drug targets are essential for cancer survival",
+    color: "#dc2626",
+  },
 };
 
 export default function HypothesisDetailPage() {

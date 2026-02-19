@@ -37,6 +37,7 @@ class Hypothesis(Base):
     clinical_evidence_score = Column(Float)
     safety_score = Column(Float)
     novelty_score = Column(Float)
+    causal_dependency_score = Column(Float, comment="DepMap CRISPR gene dependency score")
     p_value = Column(Float, comment="Permutation-based p-value against null distribution")
     fdr_adjusted_p_value = Column(Float, comment="BH FDR-corrected p-value")
     confidence_interval = Column(JSONB, comment="Bootstrap 95% CI for composite score")

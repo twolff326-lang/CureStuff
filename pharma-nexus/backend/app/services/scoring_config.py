@@ -27,16 +27,18 @@ DIMENSIONS = [
     "clinical_evidence",
     "safety",
     "novelty",
+    "causal_dependency",
 ]
 
 # In-memory fallback if database is not seeded yet
 DEFAULT_WEIGHTS = {
-    "pathway_overlap": 0.20,
-    "expression_correlation": 0.20,
-    "literature_support": 0.20,
-    "clinical_evidence": 0.15,
-    "safety": 0.10,
-    "novelty": 0.15,
+    "pathway_overlap": 0.17,
+    "expression_correlation": 0.17,
+    "literature_support": 0.15,
+    "clinical_evidence": 0.13,
+    "safety": 0.08,
+    "novelty": 0.12,
+    "causal_dependency": 0.18,
 }
 
 
@@ -44,7 +46,7 @@ class ScoringConfig:
     """Manages scoring weight configurations for hypothesis composite scoring.
 
     The composite score for each hypothesis is:
-        composite = sum(weight_i * dimension_score_i for i in 6 dimensions)
+        composite = sum(weight_i * dimension_score_i for i in 7 dimensions)
 
     Weights must sum to 1.0 and each must be between 0.0 and 1.0.
     """
@@ -232,7 +234,15 @@ class ScoringConfig:
 
     @staticmethod
     def _validate_weights(weights: dict[str, float]) -> None:
-        """Validate scoring weights sum to 1.0 and have all dimensions."""
+        """Validate scoring weights sum to 1.0 and have all dimensions.
+
+        Accepts both 6-dimension (legacy) and 7-dimension weight sets.
+        If causal_dependency is missing, it's auto-added with weight 0.
+        """
+        # Auto-add causal_dependency for legacy presets
+        if "causal_dependency" not in weights:
+            weights["causal_dependency"] = 0.0
+
         missing = set(DIMENSIONS) - set(weights.keys())
         if missing:
             raise ValueError(f"Missing weight dimensions: {missing}")

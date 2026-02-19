@@ -191,6 +191,33 @@ def ingest_cosmic(self, census_tsv_path=None):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.ingest_depmap")
+def ingest_depmap(self, gene_effect_csv_path=None):
+    """Ingest CRISPR gene dependency data from DepMap.
+
+    Mode A: Parse a CRISPRGeneEffect.csv file (provide gene_effect_csv_path)
+    Mode B: Use curated dependency data from published DepMap findings
+    """
+    logger.info("Starting DepMap ingestion task")
+    try:
+        from app.services.ingestion.depmap import DepMapConnector
+
+        kwargs = {}
+        if gene_effect_csv_path:
+            kwargs["gene_effect_csv_path"] = gene_effect_csv_path
+
+        result = run_async(_run_connector(DepMapConnector, **kwargs))
+        logger.info(
+            "DepMap ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("DepMap ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
 @celery_app.task(name="app.tasks.ingest.ingest_all_cancer_data")
 def ingest_all_cancer_data(census_tsv_path=None):
     """Run all cancer data ingestion: cBioPortal first, then TCGA + COSMIC in parallel.

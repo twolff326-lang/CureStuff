@@ -316,6 +316,7 @@ const DIMENSION_LABELS: Record<string, { label: string; color: string }> = {
   clinical_evidence: { label: "Clin", color: "bg-emerald-500" },
   safety: { label: "Safe", color: "bg-teal-500" },
   novelty: { label: "Nov", color: "bg-rose-500" },
+  causal_dependency: { label: "Dep", color: "bg-red-600" },
 };
 
 function DimensionBars({

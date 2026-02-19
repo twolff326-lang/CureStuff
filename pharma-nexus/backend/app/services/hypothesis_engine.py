@@ -194,6 +194,7 @@ class HypothesisEngine:
                     "clinical_evidence": {"score": hyp.clinical_evidence_score or 0},
                     "safety": {"score": hyp.safety_score or 0},
                     "novelty": {"score": hyp.novelty_score or 0},
+                    "causal_dependency": {"score": hyp.causal_dependency_score or 0},
                 }
                 new_composite = self.config.compute_composite_score(
                     dimension_scores, weights
@@ -646,7 +647,7 @@ class HypothesisEngine:
         analyzer = PathwayAnalyzer(db)
         pathway_data = await analyzer.get_pathway_overlap(drug_id, cancer_type_id)
 
-        # Score all 6 dimensions
+        # Score all 7 dimensions
         dimension_scores = await self.scorer.score_all_dimensions(
             drug_id, cancer_type_id, db, pathway_data=pathway_data
         )
@@ -692,6 +693,7 @@ class HypothesisEngine:
             hypothesis.clinical_evidence_score = dimension_scores["clinical_evidence"]["score"]
             hypothesis.safety_score = dimension_scores["safety"]["score"]
             hypothesis.novelty_score = dimension_scores["novelty"]["score"]
+            hypothesis.causal_dependency_score = dimension_scores["causal_dependency"]["score"]
         else:
             # Create new
             hypothesis = Hypothesis(
@@ -707,6 +709,7 @@ class HypothesisEngine:
                 clinical_evidence_score=dimension_scores["clinical_evidence"]["score"],
                 safety_score=dimension_scores["safety"]["score"],
                 novelty_score=dimension_scores["novelty"]["score"],
+                causal_dependency_score=dimension_scores["causal_dependency"]["score"],
                 status="generated",
             )
             db.add(hypothesis)
@@ -805,6 +808,7 @@ class HypothesisEngine:
                 "clinical_evidence": "clinical evidence",
                 "safety": "safety profile",
                 "novelty": "novelty",
+                "causal_dependency": "causal dependency (DepMap)",
             }
             parts.append(
                 f"Strongest signal: {dim_labels.get(top[0], top[0])} "

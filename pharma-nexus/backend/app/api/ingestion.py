@@ -13,11 +13,13 @@ VALID_SOURCES = {
     "drugbank", "pubchem", "chembl", "all_drugs",
     "cbioportal", "tcga", "cosmic", "all_cancer_data",
     "kegg", "reactome", "string", "uniprot", "opentargets", "all_pathways",
+    "depmap",
     "literature", "clinical_trials", "embeddings", "literature_analysis",
     "all_literature", "knowledge_graph",
     "differential_expression", "expression_scores", "pathway_activity",
     "full_expression_analysis",
     "hypotheses_cancer", "hypotheses_drug", "hypotheses_all", "rescore_hypotheses",
+    "combinations_cancer", "combinations_all",
     "llm_narratives", "llm_full_analysis", "llm_comparative", "llm_single_analysis",
 }
 
@@ -80,6 +82,9 @@ async def start_ingestion(request: IngestionRequest):
         "hypotheses_drug": "app.tasks.generate.generate_hypotheses_for_drug",
         "hypotheses_all": "app.tasks.generate.generate_all_hypotheses",
         "rescore_hypotheses": "app.tasks.generate.rescore_hypotheses",
+        "depmap": "app.tasks.ingest.ingest_depmap",
+        "combinations_cancer": "app.tasks.generate.generate_combinations_for_cancer",
+        "combinations_all": "app.tasks.generate.generate_all_combinations",
         "llm_narratives": "app.tasks.analyze.generate_narratives_batch",
         "llm_full_analysis": "app.tasks.analyze.generate_full_analysis_batch",
         "llm_comparative": "app.tasks.analyze.generate_comparative_analyses",
@@ -112,6 +117,10 @@ async def start_ingestion(request: IngestionRequest):
         kwargs["min_score"] = request.min_score
     if source == "rescore_hypotheses" and request.preset_name:
         kwargs["preset_name"] = request.preset_name
+    if source == "combinations_cancer" and request.cancer_type_id:
+        kwargs["cancer_type_id"] = request.cancer_type_id
+    if source in ("combinations_cancer", "combinations_all") and request.min_score:
+        kwargs["min_single_score"] = request.min_score
     if source in ("llm_narratives", "llm_full_analysis") and request.min_score:
         kwargs["min_score"] = request.min_score
     if source in ("llm_narratives", "llm_full_analysis") and request.limit:
@@ -228,6 +237,7 @@ async def get_record_counts(
     from app.models.literature import Literature
     from app.models.clinical_trial import ClinicalTrial
     from app.models.evidence import Bioassay
+    from app.models.gene_dependency import GeneDependency, CombinationHypothesis
 
     tables = {
         "drugs": Drug,
@@ -242,6 +252,8 @@ async def get_record_counts(
         "literature": Literature,
         "clinical_trials": ClinicalTrial,
         "bioassays": Bioassay,
+        "gene_dependencies": GeneDependency,
+        "combination_hypotheses": CombinationHypothesis,
     }
 
     counts: dict[str, int] = {}

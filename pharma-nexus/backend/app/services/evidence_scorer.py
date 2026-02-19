@@ -1,12 +1,13 @@
 """Evidence scoring service for hypothesis composite scoring.
 
-Implements 6 independent scoring dimensions (each 0-100):
+Implements 7 independent scoring dimensions (each 0-100):
   1. pathway_overlap     — Fisher's exact + hypergeometric FDR-corrected p-values
   2. expression_correlation — Pharmacological compatibility using binding affinity (Ki/IC50)
   3. literature_support   — Quality-weighted literature scoring (journal, study type, recency)
   4. clinical_evidence    — Existing clinical trials for the drug-cancer pair
   5. safety               — Drug safety/approval status and known toxicity
   6. novelty              — Inverse of existing evidence (fewer papers/trials = more novel)
+  7. causal_dependency    — DepMap CRISPR essentiality (does KO of drug target kill cancer?)
 
 Each scorer returns:
   {"score": 0-100, "details": {...}, "evidence": [...], "confidence_interval": {...}}
@@ -18,6 +19,7 @@ Statistical foundations:
     findings extraction), publication recency, and mention specificity
   - All dimensions include bootstrap confidence intervals
   - Novelty uses information-theoretic surprise (log-scaled evidence decay)
+  - Causal dependency uses DepMap CRISPR gene effect scores (Chronos)
 """
 
 import logging
@@ -33,6 +35,7 @@ from app.models.clinical_trial import ClinicalTrial
 from app.models.drug import Drug, DrugTarget, LiteratureDrug, TrialDrug
 from app.models.evidence import Bioassay
 from app.models.expression_cache import ExpressionScoreCache
+from app.models.gene_dependency import GeneDependency
 from app.models.literature import Literature, LiteratureCancer
 from app.models.pathway import Pathway, PathwayTarget
 from app.models.target import Target
@@ -880,6 +883,226 @@ class EvidenceScorer:
         }
 
     # ------------------------------------------------------------------
+    # 7. Causal Dependency Score (DepMap CRISPR)
+    # ------------------------------------------------------------------
+
+    async def score_causal_dependency(
+        self,
+        drug_id: int,
+        cancer_type_id: int,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        """Score based on functional dependency of drug targets in the cancer.
+
+        Uses DepMap CRISPR gene effect scores to determine whether the drug's
+        target genes are actually essential for cancer cell survival. This
+        distinguishes DRIVER targets (cancer cells die when the gene is knocked
+        out) from PASSENGER targets (gene is mutated but dispensable).
+
+        Scoring:
+          For each drug target gene:
+            1. Look up DepMap gene_effect for that gene in the cancer's lineage
+            2. gene_effect < -0.5 means "essential" (KO kills the cells)
+            3. Weight by: dependency_probability and selectivity
+
+          Score components:
+            - Best target dependency:       up to 40 pts (strongest single target)
+            - Selective dependency bonus:    up to 25 pts (essential HERE but not everywhere)
+            - Multi-target coverage:         up to 20 pts (multiple essential targets)
+            - Dependency probability:        up to 15 pts (high confidence of essentiality)
+        """
+        # Get the cancer type to determine lineage
+        cancer_result = await db.execute(
+            select(CancerType.name, CancerType.tissue, CancerType.organ).where(
+                CancerType.id == cancer_type_id
+            )
+        )
+        cancer_row = cancer_result.first()
+        if not cancer_row:
+            return {"score": 0, "details": {"reason": "cancer_not_found"}, "evidence": []}
+
+        # Map cancer to DepMap lineage
+        lineage = _cancer_to_depmap_lineage(
+            cancer_row.name, cancer_row.tissue, cancer_row.organ
+        )
+
+        # Get drug targets
+        target_result = await db.execute(
+            select(Target.gene_symbol, DrugTarget.action_type)
+            .join(DrugTarget, DrugTarget.target_id == Target.id)
+            .where(DrugTarget.drug_id == drug_id)
+        )
+        drug_targets = target_result.all()
+
+        if not drug_targets:
+            return {
+                "score": 0,
+                "details": {"reason": "no_targets"},
+                "evidence": [],
+                "confidence_interval": {"point_estimate": 0, "ci_lower": 0, "ci_upper": 0},
+            }
+
+        target_genes = [t[0] for t in drug_targets if t[0]]
+
+        # Look up DepMap dependency data for these genes in this lineage
+        dep_result = await db.execute(
+            select(GeneDependency).where(
+                GeneDependency.gene_symbol.in_(target_genes),
+                GeneDependency.lineage == lineage,
+            )
+        )
+        dependencies = {d.gene_symbol: d for d in dep_result.scalars().all()}
+
+        # Also try broader lineage match if specific one found nothing
+        if not dependencies and lineage:
+            dep_result_broad = await db.execute(
+                select(GeneDependency).where(
+                    GeneDependency.gene_symbol.in_(target_genes),
+                )
+            )
+            all_deps = dep_result_broad.scalars().all()
+            # Use the lineage with the strongest effects
+            for d in all_deps:
+                if d.gene_symbol not in dependencies or (
+                    d.gene_effect < dependencies[d.gene_symbol].gene_effect
+                ):
+                    dependencies[d.gene_symbol] = d
+
+        if not dependencies:
+            return {
+                "score": 0,
+                "details": {"reason": "no_depmap_data", "lineage": lineage, "targets_checked": target_genes},
+                "evidence": [],
+                "confidence_interval": {"point_estimate": 0, "ci_lower": 0, "ci_upper": 0},
+            }
+
+        # Score each target
+        target_scores = []
+        evidence = []
+        essential_count = 0
+        selective_count = 0
+
+        for gene, action_type in drug_targets:
+            if not gene or gene not in dependencies:
+                continue
+
+            dep = dependencies[gene]
+            effect = dep.gene_effect
+            prob = dep.dependency_probability or 0
+            selective = dep.is_strongly_selective == 1
+
+            # Is this gene essential? (gene_effect < -0.5)
+            is_essential = effect < -0.5
+            if is_essential:
+                essential_count += 1
+            if selective:
+                selective_count += 1
+
+            # Target dependency score: how strongly essential
+            # Map gene_effect to 0-1: effect of -1.0 => 1.0, effect of 0 => 0
+            dep_strength = max(min(-effect, 1.5), 0) / 1.5
+
+            # Action alignment bonus: inhibiting a dependency is therapeutically rational
+            action_class = _classify_action((action_type or "").lower())
+            if action_class == "inhibitor" and is_essential:
+                alignment = 1.0  # Perfect: inhibiting something the cancer needs
+            elif action_class == "inhibitor":
+                alignment = 0.3
+            elif is_essential:
+                alignment = 0.5
+            else:
+                alignment = 0.2
+
+            combined = dep_strength * alignment * prob
+            target_scores.append(combined)
+
+            effect_label = "ESSENTIAL" if is_essential else "dispensable"
+            selective_label = " (SELECTIVE)" if selective else ""
+
+            evidence.append({
+                "evidence_type": "causal_dependency",
+                "source_type": "depmap_crispr",
+                "source_id": f"depmap_{gene}_{lineage}",
+                "description": (
+                    f"{gene}: gene_effect={effect:.2f} ({effect_label}{selective_label}), "
+                    f"dep_probability={prob:.2f}, "
+                    f"action={action_class}, alignment={alignment:.1f}, "
+                    f"lineage={dep.lineage}"
+                ),
+                "strength": "strong" if combined > 0.6 else ("moderate" if combined > 0.3 else "weak"),
+                "confidence": min(prob, 1.0),
+                "raw_data": {
+                    "gene_symbol": gene,
+                    "gene_effect": effect,
+                    "dependency_probability": prob,
+                    "is_essential": is_essential,
+                    "is_strongly_selective": selective,
+                    "selectivity_score": dep.selectivity_score,
+                    "action_class": action_class,
+                    "combined_score": round(combined, 3),
+                    "lineage": dep.lineage,
+                },
+            })
+
+        if not target_scores:
+            return {
+                "score": 0,
+                "details": {"reason": "no_dependency_matches", "lineage": lineage},
+                "evidence": [],
+                "confidence_interval": {"point_estimate": 0, "ci_lower": 0, "ci_upper": 0},
+            }
+
+        # Compute composite causal dependency score
+        best_score = max(target_scores)
+        avg_score = sum(target_scores) / len(target_scores)
+
+        # Component 1: Best target dependency (up to 40)
+        best_component = best_score * 40
+
+        # Component 2: Selective dependency bonus (up to 25)
+        # Selectivity means the cancer SPECIFICALLY depends on this gene
+        selectivity_component = min(selective_count * 12.5, 25)
+
+        # Component 3: Multi-target coverage (up to 20)
+        # More essential targets = more robust hypothesis
+        multi_component = min(essential_count * 7, 20)
+
+        # Component 4: Average dependency probability (up to 15)
+        avg_prob = sum(
+            dependencies[g].dependency_probability or 0
+            for g, _ in drug_targets if g in dependencies
+        ) / max(len(dependencies), 1)
+        prob_component = avg_prob * 15
+
+        score = min(round(best_component + selectivity_component + multi_component + prob_component), 100)
+
+        ci = bootstrap_confidence_interval(
+            [s * 100 for s in target_scores]
+        ) if target_scores else {"point_estimate": 0, "ci_lower": 0, "ci_upper": 0}
+
+        return {
+            "score": score,
+            "details": {
+                "lineage": lineage,
+                "targets_with_depmap_data": len(dependencies),
+                "total_drug_targets": len(drug_targets),
+                "essential_targets": essential_count,
+                "selective_dependencies": selective_count,
+                "best_target_score": round(best_score, 3),
+                "avg_target_score": round(avg_score, 3),
+                "score_components": {
+                    "best_target": round(best_component, 1),
+                    "selectivity_bonus": round(selectivity_component, 1),
+                    "multi_target": round(multi_component, 1),
+                    "probability": round(prob_component, 1),
+                },
+                "scoring_method": "depmap_crispr_chronos",
+            },
+            "evidence": evidence[:5],
+            "confidence_interval": ci,
+        }
+
+    # ------------------------------------------------------------------
     # Composite scoring
     # ------------------------------------------------------------------
 
@@ -890,7 +1113,7 @@ class EvidenceScorer:
         db: AsyncSession,
         pathway_data: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Score all 6 dimensions for a drug-cancer pair.
+        """Score all 7 dimensions for a drug-cancer pair.
 
         Returns a dict keyed by dimension name, each containing:
           {"score": int, "details": dict, "evidence": list}
@@ -913,6 +1136,9 @@ class EvidenceScorer:
             drug_id, cancer_type_id, db
         )
         results["novelty"] = await self.score_novelty(
+            drug_id, cancer_type_id, db
+        )
+        results["causal_dependency"] = await self.score_causal_dependency(
             drug_id, cancer_type_id, db
         )
 
@@ -1027,3 +1253,58 @@ def _phase_to_confidence(phase: str | None) -> float:
     if "2" in phase_lower:
         return 0.7
     return 0.5
+
+
+def _cancer_to_depmap_lineage(
+    cancer_name: str,
+    tissue: str | None = None,
+    organ: str | None = None,
+) -> str:
+    """Map a cancer type name/tissue/organ to a DepMap lineage identifier.
+
+    DepMap uses simplified lineage names (breast, lung, colorectal, etc.).
+    """
+    name_lower = (cancer_name or "").lower()
+    tissue_lower = (tissue or "").lower()
+    organ_lower = (organ or "").lower()
+    combined = f"{name_lower} {tissue_lower} {organ_lower}"
+
+    lineage_keywords = {
+        "breast": "breast",
+        "lung": "lung",
+        "colon": "colorectal",
+        "colorectal": "colorectal",
+        "rectal": "colorectal",
+        "ovari": "ovary",
+        "prostat": "prostate",
+        "pancrea": "pancreas",
+        "melanoma": "skin",
+        "skin": "skin",
+        "liver": "liver",
+        "hepato": "liver",
+        "kidney": "kidney",
+        "renal": "kidney",
+        "stomach": "gastric",
+        "gastric": "gastric",
+        "esophag": "gastric",
+        "glioblastoma": "cns",
+        "glioma": "cns",
+        "brain": "cns",
+        "uter": "breast",  # Hormone-related, nearest lineage
+        "cervic": "breast",
+        "bladder": "kidney",  # Genitourinary, nearest lineage
+        "thyroid": "lung",  # Endocrine, nearest lineage
+        "head and neck": "lung",
+        "sarcoma": "bone",
+        "bone": "bone",
+        "leukemia": "blood",
+        "myeloid": "blood",
+        "lymphoma": "blood",
+        "myeloma": "blood",
+    }
+
+    for keyword, lineage in lineage_keywords.items():
+        if keyword in combined:
+            return lineage
+
+    return "unknown"
