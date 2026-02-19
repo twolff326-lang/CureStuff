@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchApi } from "@/lib/api";
-import type { Hypothesis, CancerType } from "@/types";
+import type { Hypothesis, CancerType, DimensionScores } from "@/types";
 
 // ---------------------------------------------------------------
 // Hypotheses list page
@@ -322,13 +322,13 @@ const DIMENSION_LABELS: Record<string, { label: string; color: string }> = {
 function DimensionBars({
   scores,
 }: {
-  scores: Record<string, number> | undefined;
+  scores: DimensionScores | undefined;
 }) {
   if (!scores) return null;
   return (
     <div className="flex items-center gap-1.5">
       {Object.entries(DIMENSION_LABELS).map(([key, { label, color }]) => {
-        const val = scores[key] ?? 0;
+        const val = (scores as Record<string, number>)[key] ?? 0;
         return (
           <div key={key} className="flex-1 min-w-0" title={`${label}: ${Math.round(val)}`}>
             <div className="text-[10px] text-slate-400 mb-0.5 text-center">
