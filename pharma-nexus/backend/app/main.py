@@ -28,6 +28,35 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Pharma Nexus starting (env=%s)", settings.app_env)
+
+    # Mark any ingestion logs stuck in "running" as failed.
+    # This happens when the server crashes mid-ingestion — the logs never
+    # get finalized, and the frontend hides the Start button for those
+    # sources because it thinks they're still running.
+    try:
+        from app.database import async_session_factory
+        from app.models.ingestion_log import IngestionLog
+        from sqlalchemy import update
+        from datetime import datetime, timezone
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                update(IngestionLog)
+                .where(IngestionLog.status == "running")
+                .values(
+                    status="failed",
+                    errors=[{"context": "startup", "error": "Interrupted by server restart"}],
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            if result.rowcount:
+                logger.warning(
+                    "Marked %d stale 'running' ingestion logs as failed", result.rowcount
+                )
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to clean up stale ingestion logs")
+
     yield
     from app.database import engine
     await engine.dispose()
