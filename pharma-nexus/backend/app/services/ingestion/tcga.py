@@ -261,14 +261,22 @@ class TCGAConnector(BaseConnector):
                 "source": "gdc",
             })
 
-        count = await self.batch_upsert_composite(
+        # Remove previous GDC mutation data for this cancer type before
+        # inserting fresh results.  The mutations table has no unique
+        # constraint on (cancer_type_id, gene_symbol) — other sources may
+        # store multiple rows per gene — so ON CONFLICT upsert won't work.
+        from sqlalchemy import delete
+        await session.execute(
+            delete(Mutation).where(
+                Mutation.cancer_type_id == cancer_type_id,
+                Mutation.source == "gdc",
+            )
+        )
+
+        count = await self.batch_insert_no_conflict(
             session,
             Mutation,
             mutation_records,
-            conflict_columns=["cancer_type_id", "gene_symbol"],
-            update_columns=[
-                "mutation_type", "genomic_position", "frequency_percent", "source",
-            ],
         )
         logger.info(
             "%s: stored %d top mutated genes from GDC", project_id, count
