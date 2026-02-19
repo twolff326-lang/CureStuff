@@ -178,6 +178,52 @@ async def get_ingestion_status(
     }
 
 
+@router.get("/live-status")
+async def get_live_status(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent ingestion log for every source.
+
+    Used by the frontend to poll for realtime progress across all data
+    source cards simultaneously.  Running sources include the live
+    ``records_processed`` count that gets flushed every batch.
+    """
+    # Subquery: latest log id per source
+    latest_per_source = (
+        select(
+            IngestionLog.source,
+            func.max(IngestionLog.id).label("max_id"),
+        )
+        .group_by(IngestionLog.source)
+        .subquery()
+    )
+
+    result = await db.execute(
+        select(IngestionLog)
+        .join(
+            latest_per_source,
+            (IngestionLog.source == latest_per_source.c.source)
+            & (IngestionLog.id == latest_per_source.c.max_id),
+        )
+    )
+    logs = result.scalars().all()
+
+    sources: dict[str, dict] = {}
+    for log in logs:
+        sources[log.source] = {
+            "id": log.id,
+            "source": log.source,
+            "task_type": log.task_type,
+            "status": log.status,
+            "records_processed": log.records_processed,
+            "errors": log.errors,
+            "started_at": log.started_at.isoformat() if log.started_at else None,
+            "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+        }
+
+    return {"sources": sources}
+
+
 @router.get("/logs")
 async def get_ingestion_logs(
     source: str | None = Query(None, description="Filter by source name"),

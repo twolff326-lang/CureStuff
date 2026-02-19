@@ -197,6 +197,8 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
+            self._records_processed = total
+            await self._flush_progress(session)
 
         return total
 
@@ -237,6 +239,8 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
+            self._records_processed = total
+            await self._flush_progress(session)
 
         return total
 
@@ -258,6 +262,8 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
+            self._records_processed = total
+            await self._flush_progress(session)
 
         return total
 
@@ -313,6 +319,22 @@ class BaseConnector(ABC):
             )
         )
         await session.execute(stmt)
+
+    async def _flush_progress(self, session: AsyncSession) -> None:
+        """Flush the current records_processed count to the ingestion log.
+
+        Called after every batch so that the live-status API can report
+        near-realtime record counts to the frontend.
+        """
+        if self._log_id is None:
+            return
+        stmt = (
+            update(IngestionLog)
+            .where(IngestionLog.id == self._log_id)
+            .values(records_processed=self._records_processed)
+        )
+        await session.execute(stmt)
+        await session.commit()
 
     # ------------------------------------------------------------------
     # Main run method

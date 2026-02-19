@@ -23,6 +23,22 @@ const config: Config = {
           950: "#172554",
         },
       },
+      animation: {
+        shimmer: "shimmer 2s infinite linear",
+        "progress-indeterminate":
+          "progress-indeterminate 1.5s infinite ease-in-out",
+      },
+      keyframes: {
+        shimmer: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        "progress-indeterminate": {
+          "0%": { width: "15%", marginLeft: "0%" },
+          "50%": { width: "40%", marginLeft: "30%" },
+          "100%": { width: "15%", marginLeft: "85%" },
+        },
+      },
     },
   },
   plugins: [],
