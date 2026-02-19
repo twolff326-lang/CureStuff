@@ -9,6 +9,7 @@ const navigation = [
   { name: "Knowledge Graph", href: "/knowledge-graph" },
   { name: "Analysis", href: "/analysis" },
   { name: "Data Sources", href: "/data-sources" },
+  { name: "Ingested Data", href: "/ingested-data" },
 ];
 
 export default function Sidebar() {

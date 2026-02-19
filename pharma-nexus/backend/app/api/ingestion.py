@@ -178,6 +178,48 @@ async def get_ingestion_status(
     }
 
 
+@router.get("/record-counts")
+async def get_record_counts(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return row counts for every major data table.
+
+    Used by the Ingested Data page to show tab header counts and give
+    an at-a-glance view of how much data has been ingested.
+    """
+    from app.models.drug import Drug, DrugTarget
+    from app.models.target import Target, ProteinInteraction
+    from app.models.cancer_type import CancerType, CancerMolecularProfile
+    from app.models.mutation import Mutation
+    from app.models.pathway import Pathway, PathwayTarget
+    from app.models.literature import Literature
+    from app.models.clinical_trial import ClinicalTrial
+    from app.models.evidence import Bioassay
+
+    tables = {
+        "drugs": Drug,
+        "targets": Target,
+        "drug_targets": DrugTarget,
+        "cancer_types": CancerType,
+        "molecular_profiles": CancerMolecularProfile,
+        "mutations": Mutation,
+        "pathways": Pathway,
+        "pathway_targets": PathwayTarget,
+        "protein_interactions": ProteinInteraction,
+        "literature": Literature,
+        "clinical_trials": ClinicalTrial,
+        "bioassays": Bioassay,
+    }
+
+    counts: dict[str, int] = {}
+    for key, model in tables.items():
+        result = await db.execute(select(func.count(model.id)))
+        counts[key] = result.scalar() or 0
+
+    counts["total"] = sum(counts.values())
+    return {"counts": counts}
+
+
 @router.get("/live-status")
 async def get_live_status(
     db: AsyncSession = Depends(get_db),

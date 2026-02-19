@@ -167,6 +167,58 @@ async def get_pathway_genes(
 
 
 # ------------------------------------------------------------------
+# Targets (browseable list)
+# ------------------------------------------------------------------
+
+
+@router.get("/targets")
+async def list_targets(
+    search: str | None = Query(None, description="Search by gene_symbol, uniprot_id, or gene_name"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Paginated, searchable list of protein targets."""
+    query = select(Target)
+    count_query = select(func.count(Target.id))
+
+    if search:
+        search_filter = or_(
+            Target.gene_symbol.ilike(f"%{search}%"),
+            Target.uniprot_id.ilike(f"%{search}%"),
+            Target.gene_name.ilike(f"%{search}%"),
+        )
+        query = query.where(search_filter)
+        count_query = count_query.where(search_filter)
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    offset = (page - 1) * per_page
+    query = query.order_by(Target.gene_symbol).offset(offset).limit(per_page)
+    result = await db.execute(query)
+    targets = result.scalars().all()
+
+    return {
+        "targets": [
+            {
+                "id": t.id,
+                "uniprot_id": t.uniprot_id,
+                "gene_symbol": t.gene_symbol,
+                "gene_name": t.gene_name,
+                "organism": t.organism,
+                "protein_class": t.protein_class,
+                "ensembl_gene_id": t.ensembl_gene_id,
+            }
+            for t in targets
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+# ------------------------------------------------------------------
 # Gene pathways (cross-database)
 # ------------------------------------------------------------------
 
