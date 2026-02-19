@@ -5,6 +5,17 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# ---- Dev stage (used by docker-compose for local development) ----
+FROM node:20-alpine AS dev
+
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json* ./
+
+EXPOSE 3000
+
+CMD ["npx", "next", "dev"]
+
 # ---- Build stage ----
 FROM node:20-alpine AS builder
 
