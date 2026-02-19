@@ -328,7 +328,7 @@ function DimensionBars({
   return (
     <div className="flex items-center gap-1.5">
       {Object.entries(DIMENSION_LABELS).map(([key, { label, color }]) => {
-        const val = (scores as Record<string, number>)[key] ?? 0;
+        const val = scores[key as keyof DimensionScores] ?? 0;
         return (
           <div key={key} className="flex-1 min-w-0" title={`${label}: ${Math.round(val)}`}>
             <div className="text-[10px] text-slate-400 mb-0.5 text-center">
