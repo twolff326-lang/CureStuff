@@ -113,6 +113,65 @@ export interface GraphEdge {
   properties?: Record<string, unknown>;
 }
 
+// Tallula Algorithm
+export interface TallulaDiscovery {
+  id: number;
+  hypothesis_id: number;
+  drug_id: number;
+  cancer_type_id: number;
+  discovery_class: "robust" | "resonant" | "fragile" | "moderate" | "weak";
+  deterministic_score: number;
+  ubiquity: number;
+  resonance: number;
+  fragility_index: number;
+  critical_dimension: string | null;
+  score_mean: number | null;
+  score_median: number | null;
+  score_std: number | null;
+  score_max: number | null;
+  score_min: number | null;
+  resonance_profile: {
+    activation_dimensions: { dimension: string; activation_strength: number }[];
+    narrative: string;
+  } | null;
+  ablation_impacts: Record<string, number> | null;
+}
+
+export interface TallulaRunSummary {
+  id: number;
+  created_at: string | null;
+  n_lenses: number;
+  n_hypotheses_input: number;
+  cancer_type_id: number | null;
+  n_resonant: number;
+  n_robust: number;
+  n_fragile: number;
+  n_moderate: number;
+  n_weak: number;
+  parameters: Record<string, unknown>;
+}
+
+export interface TallulaRunResult {
+  algorithm: string;
+  version: string;
+  run_id: number;
+  parameters: {
+    n_lenses: number;
+    dropout_rate: number;
+    dirichlet_alpha: number;
+    seed: number | null;
+    n_hypotheses_input: number;
+  };
+  summary: {
+    class_counts: Record<string, number>;
+    n_resonant: number;
+    n_robust: number;
+    n_fragile: number;
+    global_score_threshold_p80: number;
+  };
+  discoveries: TallulaDiscovery[];
+}
+
 // Expression analysis
 export interface TopGene {
   gene_symbol: string;
