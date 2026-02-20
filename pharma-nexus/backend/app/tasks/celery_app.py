@@ -24,6 +24,7 @@ celery_app.conf.update(
         "app.tasks.generate.*": {"queue": "generation"},
         "app.tasks.gnn.*": {"queue": "analysis"},
         "app.tasks.monitor.*": {"queue": "ingestion"},
+        "app.tasks.pipeline.*": {"queue": "analysis"},
     },
     # Celery Beat schedule for automated tasks
     beat_schedule={

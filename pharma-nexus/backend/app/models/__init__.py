@@ -12,6 +12,7 @@ from app.models.expression_cache import ExpressionScoreCache
 from app.models.scoring_config import ScoringWeight
 from app.models.llm_analysis import HypothesisAnalysis, LLMUsageLog
 from app.models.gene_dependency import GeneDependency, CombinationHypothesis
+from app.models.pipeline_run import PipelineRun
 
 __all__ = [
     "Drug",
@@ -40,4 +41,5 @@ __all__ = [
     "LLMUsageLog",
     "GeneDependency",
     "CombinationHypothesis",
+    "PipelineRun",
 ]

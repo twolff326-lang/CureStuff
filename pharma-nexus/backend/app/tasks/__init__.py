@@ -1,4 +1,5 @@
 from app.tasks.celery_app import celery_app
+from app.tasks.pipeline import run_full_pipeline
 from app.tasks.ingest import (
     ingest_drugbank,
     ingest_pubchem,
@@ -18,6 +19,7 @@ from app.tasks.ingest import (
 
 __all__ = [
     "celery_app",
+    "run_full_pipeline",
     "ingest_drugbank",
     "ingest_pubchem",
     "ingest_chembl",
