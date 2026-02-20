@@ -23,6 +23,7 @@ export interface DimensionScores {
   safety: number;
   novelty: number;
   causal_dependency: number;
+  gnn_link: number;
 }
 
 export interface Hypothesis {
@@ -152,16 +153,33 @@ export interface TallulaRunSummary {
   parameters: Record<string, unknown>;
 }
 
+export interface CrossCancerTransfer {
+  source_hypothesis_id: number;
+  source_cancer_type_id: number;
+  target_hypothesis_id: number;
+  target_cancer_type_id: number;
+  drug_id: number;
+  shared_activation_dimensions: string[];
+  activation_strength_in_target: number;
+  source_resonance: number;
+}
+
 export interface TallulaRunResult {
   algorithm: string;
   version: string;
   run_id: number;
   parameters: {
     n_lenses: number;
+    n_initial_lenses: number;
+    n_adaptive_lenses: number;
     dropout_rate: number;
     dirichlet_alpha: number;
     seed: number | null;
     n_hypotheses_input: number;
+    use_interactions: boolean;
+    interaction_strength: number;
+    adaptive_lenses: boolean;
+    cross_cancer_transfer: boolean;
   };
   summary: {
     class_counts: Record<string, number>;
@@ -169,8 +187,75 @@ export interface TallulaRunResult {
     n_robust: number;
     n_fragile: number;
     global_score_threshold_p80: number;
+    n_cross_cancer_transfers: number;
   };
   discoveries: TallulaDiscovery[];
+  cross_cancer_transfers: CrossCancerTransfer[];
+}
+
+// GNN Link Prediction
+export interface GNNTrainingStatus {
+  status: string;
+  run_id: number | null;
+  created_at: string | null;
+  completed_at: string | null;
+  epochs: number;
+  graph_stats: {
+    drugs: number | null;
+    targets: number | null;
+    cancers: number | null;
+    pathways: number | null;
+    positive_labels: number | null;
+  };
+  test_metrics: {
+    roc_auc: number | null;
+    avg_precision: number | null;
+    accuracy: number | null;
+  };
+  best_val_auc: number | null;
+  has_cached_predictions: boolean;
+}
+
+export interface GNNPrediction {
+  drug_id: number;
+  cancer_type_id: number;
+  gnn_score: number;
+  gnn_score_pct: number;
+  source: string;
+}
+
+// Literature Monitoring
+export interface LiteratureAlert {
+  id: number;
+  hypothesis_id: number;
+  alert_type: string;
+  severity: "info" | "notable" | "significant" | "critical";
+  title: string;
+  description: string | null;
+  score_delta: number | null;
+  source_pmid: string | null;
+  is_read: number;
+  created_at: string | null;
+}
+
+export interface ScoreHistoryEntry {
+  id: number;
+  old_score: number;
+  new_score: number;
+  delta: number;
+  trigger: string;
+  trigger_details: Record<string, unknown>;
+  dimension_scores: DimensionScores | null;
+  created_at: string | null;
+}
+
+export interface MonitoringConfig {
+  id: number;
+  hypothesis_id: number;
+  is_active: boolean;
+  alert_threshold: number;
+  check_interval_hours: number;
+  last_checked_at: string | null;
 }
 
 // Expression analysis

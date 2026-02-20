@@ -28,9 +28,11 @@ DIMENSIONS = [
     "safety",
     "novelty",
     "causal_dependency",
+    "gnn_link",
 ]
 
-# In-memory fallback if database is not seeded yet
+# In-memory fallback if database is not seeded yet.
+# gnn_link starts at 0.0 — activates once a GNN model is trained.
 DEFAULT_WEIGHTS = {
     "pathway_overlap": 0.17,
     "expression_correlation": 0.17,
@@ -39,6 +41,7 @@ DEFAULT_WEIGHTS = {
     "safety": 0.08,
     "novelty": 0.12,
     "causal_dependency": 0.18,
+    "gnn_link": 0.0,
 }
 
 
@@ -236,12 +239,14 @@ class ScoringConfig:
     def _validate_weights(weights: dict[str, float]) -> None:
         """Validate scoring weights sum to 1.0 and have all dimensions.
 
-        Accepts both 6-dimension (legacy) and 7-dimension weight sets.
-        If causal_dependency is missing, it's auto-added with weight 0.
+        Accepts legacy weight sets (6 or 7 dimensions).
+        Missing dimensions are auto-added with weight 0.
         """
-        # Auto-add causal_dependency for legacy presets
+        # Auto-add missing dimensions for legacy presets
         if "causal_dependency" not in weights:
             weights["causal_dependency"] = 0.0
+        if "gnn_link" not in weights:
+            weights["gnn_link"] = 0.0
 
         missing = set(DIMENSIONS) - set(weights.keys())
         if missing:

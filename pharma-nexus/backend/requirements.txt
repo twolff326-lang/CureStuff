@@ -28,6 +28,11 @@ scikit-learn==1.4.0
 statsmodels==0.14.1
 pandas==2.2.0
 
+# Graph Neural Networks (GNN link prediction)
+torch-geometric==2.5.0
+torch-scatter==2.1.2
+torch-sparse==0.6.18
+
 # HTTP clients
 httpx==0.26.0
 aiohttp==3.9.3

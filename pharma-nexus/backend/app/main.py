@@ -15,7 +15,7 @@ from app.config import settings
 from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
     cancer, pathways, literature, clinical_trials, llm_analysis,
-    validation, combinations, tallula,
+    validation, combinations, tallula, gnn, literature_monitor,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,6 +183,12 @@ app.include_router(
 )
 app.include_router(
     tallula.router, prefix="/api/tallula", tags=["tallula"]
+)
+app.include_router(
+    gnn.router, prefix="/api/gnn", tags=["gnn"]
+)
+app.include_router(
+    literature_monitor.router, prefix="/api/monitoring", tags=["monitoring"]
 )
 
 

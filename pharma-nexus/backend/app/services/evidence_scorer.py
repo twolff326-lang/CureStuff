@@ -1106,6 +1106,95 @@ class EvidenceScorer:
     # Composite scoring
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # 8. GNN Link Prediction Score
+    # ------------------------------------------------------------------
+
+    async def score_gnn_link(
+        self,
+        drug_id: int,
+        cancer_type_id: int,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        """Score based on GNN-predicted link probability.
+
+        Uses pre-trained GNN embeddings (from knowledge graph) to predict
+        how likely a drug-cancer link is based on multi-hop graph topology.
+        The GNN learns Drug->Target->PPI->Gene->Pathway->Cancer chains
+        without explicit programming.
+
+        Falls back to database-cached predictions if available, then to
+        the in-memory predictor. Returns score 0 if no GNN model exists.
+        """
+        # Try database cache first (from most recent training run)
+        from app.models.gnn_prediction import GNNPrediction, GNNTrainingRun
+
+        latest_run_result = await db.execute(
+            select(GNNTrainingRun.id).where(
+                GNNTrainingRun.status == "completed"
+            ).order_by(GNNTrainingRun.created_at.desc()).limit(1)
+        )
+        latest_run_id = latest_run_result.scalar_one_or_none()
+
+        gnn_score = 0.0
+        source = "none"
+
+        if latest_run_id:
+            cached = await db.execute(
+                select(GNNPrediction.gnn_score).where(
+                    GNNPrediction.run_id == latest_run_id,
+                    GNNPrediction.drug_id == drug_id,
+                    GNNPrediction.cancer_type_id == cancer_type_id,
+                )
+            )
+            cached_score = cached.scalar_one_or_none()
+            if cached_score is not None:
+                gnn_score = cached_score * 100.0  # Normalize to 0-100
+                source = "database_cache"
+
+        # If not in DB cache, try in-memory predictor
+        if source == "none":
+            try:
+                from app.services.gnn_link_predictor import get_gnn_predictor
+
+                predictor = get_gnn_predictor()
+                if predictor.is_loaded:
+                    raw_score = predictor.predict_link_score(drug_id, cancer_type_id)
+                    if raw_score is not None:
+                        gnn_score = raw_score * 100.0
+                        source = "in_memory"
+            except Exception:
+                pass
+
+        score = round(min(max(gnn_score, 0), 100))
+
+        evidence = []
+        if score > 0:
+            evidence.append({
+                "evidence_type": "gnn_link_prediction",
+                "source_type": "gnn_model",
+                "description": (
+                    f"GNN predicts {score}% link probability for this drug-cancer pair "
+                    f"based on knowledge graph topology (source: {source})"
+                ),
+                "strength": _score_to_strength(score),
+                "confidence": min(score / 100.0, 1.0),
+            })
+
+        return {
+            "score": score,
+            "details": {
+                "gnn_raw_score": round(gnn_score / 100.0, 4),
+                "source": source,
+            },
+            "evidence": evidence,
+            "confidence_interval": {
+                "point_estimate": score,
+                "ci_lower": max(0, score - 10),
+                "ci_upper": min(100, score + 10),
+            },
+        }
+
     async def score_all_dimensions(
         self,
         drug_id: int,
@@ -1113,10 +1202,13 @@ class EvidenceScorer:
         db: AsyncSession,
         pathway_data: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Score all 7 dimensions for a drug-cancer pair.
+        """Score all 8 dimensions for a drug-cancer pair.
 
         Returns a dict keyed by dimension name, each containing:
           {"score": int, "details": dict, "evidence": list}
+
+        The 8th dimension (gnn_link) is the GNN-predicted link score.
+        It returns 0 if no GNN model has been trained yet.
         """
         results = {}
 
@@ -1139,6 +1231,9 @@ class EvidenceScorer:
             drug_id, cancer_type_id, db
         )
         results["causal_dependency"] = await self.score_causal_dependency(
+            drug_id, cancer_type_id, db
+        )
+        results["gnn_link"] = await self.score_gnn_link(
             drug_id, cancer_type_id, db
         )
 

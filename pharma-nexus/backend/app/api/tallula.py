@@ -42,6 +42,12 @@ class TallulaRunRequest(BaseModel):
     cancer_type_id: int | None = Field(None, description="Optional: scope to a single cancer type")
     min_deterministic_score: float = Field(5.0, ge=0.0, description="Min baseline score to include")
     top_n: int | None = Field(None, ge=1, description="Return top N per discovery class")
+    # v2.0 parameters
+    use_interactions: bool = Field(True, description="v2.0: Non-linear dimension interaction scoring")
+    interaction_strength: float = Field(0.15, ge=0.0, le=0.5, description="v2.0: Fraction of score from interactions")
+    adaptive_lenses: bool = Field(True, description="v2.0: Adaptive lens generation via importance sampling")
+    n_adaptive: int = Field(100, ge=0, le=1000, description="v2.0: Number of adaptive lenses")
+    cross_cancer_transfer: bool = Field(True, description="v2.0: Discover cross-cancer transfer candidates")
 
 
 # ------------------------------------------------------------------
@@ -74,6 +80,11 @@ async def run_tallula(
         dirichlet_alpha=request.dirichlet_alpha,
         seed=request.seed,
         top_n=request.top_n,
+        use_interactions=request.use_interactions,
+        interaction_strength=request.interaction_strength,
+        adaptive_lenses=request.adaptive_lenses,
+        n_adaptive=request.n_adaptive,
+        cross_cancer_transfer=request.cross_cancer_transfer,
     )
 
     if "error" in results and not results.get("discoveries"):

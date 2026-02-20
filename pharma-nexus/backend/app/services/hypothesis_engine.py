@@ -195,6 +195,7 @@ class HypothesisEngine:
                     "safety": {"score": hyp.safety_score or 0},
                     "novelty": {"score": hyp.novelty_score or 0},
                     "causal_dependency": {"score": hyp.causal_dependency_score or 0},
+                    "gnn_link": {"score": hyp.gnn_link_score or 0},
                 }
                 new_composite = self.config.compute_composite_score(
                     dimension_scores, weights
@@ -694,6 +695,7 @@ class HypothesisEngine:
             hypothesis.safety_score = dimension_scores["safety"]["score"]
             hypothesis.novelty_score = dimension_scores["novelty"]["score"]
             hypothesis.causal_dependency_score = dimension_scores["causal_dependency"]["score"]
+            hypothesis.gnn_link_score = dimension_scores.get("gnn_link", {}).get("score", 0)
         else:
             # Create new
             hypothesis = Hypothesis(
@@ -710,6 +712,7 @@ class HypothesisEngine:
                 safety_score=dimension_scores["safety"]["score"],
                 novelty_score=dimension_scores["novelty"]["score"],
                 causal_dependency_score=dimension_scores["causal_dependency"]["score"],
+                gnn_link_score=dimension_scores.get("gnn_link", {}).get("score", 0),
                 status="generated",
             )
             db.add(hypothesis)
