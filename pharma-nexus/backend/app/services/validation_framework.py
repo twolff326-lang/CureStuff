@@ -56,47 +56,284 @@ logger = logging.getLogger(__name__)
 # Curated from FDA approvals, RepoDB, and landmark repurposing papers.
 # Format: (drug_name_fragment, cancer_name_fragment, evidence_level)
 # evidence_level: "fda_approved" | "phase3_success" | "phase2_positive" | "preclinical_validated"
+#
+# 131 cases across 4 evidence tiers. Organized by:
+#   1. Non-cancer → cancer repurposing (FDA-approved)
+#   2. Cancer indication expansions (FDA-approved)
+#   3. Phase 3 successes
+#   4. Phase 2 positive results (non-cancer drugs with clinical anticancer signal)
+#   5. Preclinical validated (strong in vitro/in vivo evidence, peer-reviewed)
 KNOWN_REPURPOSING_CASES = [
-    # FDA-approved repurposed cancer drugs
+    # ===================================================================
+    # FDA-APPROVED: NON-CANCER → CANCER REPURPOSING
+    # Drugs originally developed/approved for non-cancer indications,
+    # subsequently granted FDA approval for cancer treatment.
+    # ===================================================================
+
+    # Thalidomide & IMiDs (sedative/anti-leprosy → hematologic cancers)
     ("thalidomide", "multiple myeloma", "fda_approved"),
     ("lenalidomide", "multiple myeloma", "fda_approved"),
-    ("methotrexate", "breast", "fda_approved"),
-    ("aspirin", "colorectal", "phase3_success"),
-    ("celecoxib", "colorectal", "phase2_positive"),
-    ("metformin", "breast", "phase2_positive"),
-    ("metformin", "colorectal", "phase2_positive"),
-    ("metformin", "endometrial", "phase2_positive"),
-    ("propranolol", "melanoma", "phase2_positive"),
-    ("itraconazole", "lung", "phase2_positive"),
-    ("itraconazole", "prostate", "phase2_positive"),
-    ("disulfiram", "glioblastoma", "preclinical_validated"),
-    ("chloroquine", "glioblastoma", "phase2_positive"),
-    ("valproic acid", "leukemia", "phase2_positive"),
+    ("pomalidomide", "multiple myeloma", "fda_approved"),
+
+    # Retinoids (dermatology → hematologic cancers)
     ("all-trans retinoic acid", "acute promyelocytic leukemia", "fda_approved"),
+    ("bexarotene", "cutaneous t-cell lymphoma", "fda_approved"),
+
+    # Traditional remedy → APL
+    ("arsenic trioxide", "acute promyelocytic leukemia", "fda_approved"),
+
+    # Corticosteroids (anti-inflammatory → hematologic cancers)
+    ("dexamethasone", "multiple myeloma", "fda_approved"),
+
+    # HDAC inhibitors (neuropsych/antibiotic screening → cancer)
+    ("vorinostat", "cutaneous t-cell lymphoma", "fda_approved"),
+    ("romidepsin", "cutaneous t-cell lymphoma", "fda_approved"),
+    ("belinostat", "peripheral t-cell lymphoma", "fda_approved"),
+    ("panobinostat", "multiple myeloma", "fda_approved"),
+
+    # mTOR inhibitors (immunosuppressant → cancer)
     ("rapamycin", "renal cell", "fda_approved"),
     ("everolimus", "breast", "fda_approved"),
     ("everolimus", "renal cell", "fda_approved"),
-    ("nivolumab", "melanoma", "fda_approved"),
-    ("pembrolizumab", "lung", "fda_approved"),
-    ("rituximab", "lymphoma", "fda_approved"),
+    ("everolimus", "pancreatic", "fda_approved"),
+    ("temsirolimus", "renal cell", "fda_approved"),
+
+    # Proteasome inhibitors (expanded indication)
+    ("bortezomib", "mantle cell lymphoma", "fda_approved"),
+
+    # Hormonal agents (contraception/osteoporosis → cancer)
+    ("tamoxifen", "breast", "fda_approved"),
+    ("raloxifene", "breast", "fda_approved"),
+
+    # Antimetabolites (antiviral nucleoside → cancer)
+    ("methotrexate", "breast", "fda_approved"),
+    ("gemcitabine", "pancreatic", "fda_approved"),
+    ("gemcitabine", "bladder", "fda_approved"),
+    ("gemcitabine", "lung", "fda_approved"),
+
+    # Biologics (antiviral → cancer)
+    ("interferon alfa", "melanoma", "fda_approved"),
+    ("interferon alfa", "renal cell", "fda_approved"),
+    ("interferon alfa", "leukemia", "fda_approved"),
+
+    # Bone agents (osteoporosis → cancer)
+    ("zoledronic acid", "multiple myeloma", "fda_approved"),
+    ("denosumab", "giant cell tumor", "fda_approved"),
+
+    # Hydroxyurea (sickle cell → leukemia)
+    ("hydroxyurea", "leukemia", "fda_approved"),
+
+    # ===================================================================
+    # FDA-APPROVED: CANCER INDICATION EXPANSIONS
+    # Drugs approved for one cancer type, subsequently approved for
+    # a mechanistically distinct cancer type.
+    # ===================================================================
+
+    # Imatinib (CML → GIST via KIT)
+    ("imatinib", "gastrointestinal stromal", "fda_approved"),
+
+    # Anti-angiogenics across tumor types
     ("bevacizumab", "colorectal", "fda_approved"),
     ("bevacizumab", "lung", "fda_approved"),
     ("bevacizumab", "glioblastoma", "fda_approved"),
+    ("bevacizumab", "ovarian", "fda_approved"),
+    ("bevacizumab", "cervical", "fda_approved"),
     ("sorafenib", "hepatocellular", "fda_approved"),
     ("sorafenib", "renal cell", "fda_approved"),
-    ("imatinib", "gastrointestinal stromal", "fda_approved"),
-    ("tamoxifen", "breast", "fda_approved"),
+    ("sorafenib", "thyroid", "fda_approved"),
+
+    # Multi-kinase inhibitors across tumor types
+    ("sunitinib", "gastrointestinal stromal", "fda_approved"),
+    ("sunitinib", "pancreatic", "fda_approved"),
+    ("pazopanib", "soft tissue sarcoma", "fda_approved"),
+    ("lenvatinib", "hepatocellular", "fda_approved"),
+    ("lenvatinib", "endometrial", "fda_approved"),
+    ("cabozantinib", "hepatocellular", "fda_approved"),
+    ("cabozantinib", "renal cell", "fda_approved"),
+
+    # Checkpoint inhibitors across tumor types
+    ("nivolumab", "melanoma", "fda_approved"),
+    ("nivolumab", "lung", "fda_approved"),
+    ("nivolumab", "renal cell", "fda_approved"),
+    ("nivolumab", "bladder", "fda_approved"),
+    ("nivolumab", "head and neck", "fda_approved"),
+    ("nivolumab", "hepatocellular", "fda_approved"),
+    ("pembrolizumab", "lung", "fda_approved"),
+    ("pembrolizumab", "melanoma", "fda_approved"),
+    ("pembrolizumab", "head and neck", "fda_approved"),
+    ("pembrolizumab", "bladder", "fda_approved"),
+    ("pembrolizumab", "gastric", "fda_approved"),
+    ("pembrolizumab", "cervical", "fda_approved"),
+    ("ipilimumab", "melanoma", "fda_approved"),
+    ("ipilimumab", "renal cell", "fda_approved"),
+
+    # PARP inhibitors across tumor types (ovarian → others)
+    ("olaparib", "breast", "fda_approved"),
+    ("olaparib", "prostate", "fda_approved"),
+    ("olaparib", "pancreatic", "fda_approved"),
+
+    # Taxanes across tumor types
+    ("docetaxel", "prostate", "fda_approved"),
+    ("paclitaxel", "breast", "fda_approved"),
+    ("paclitaxel", "lung", "fda_approved"),
+
+    # HER2 antibodies (breast → gastric)
+    ("trastuzumab", "gastric", "fda_approved"),
+
+    # Alkylating agent (melanoma → GBM)
+    ("temozolomide", "glioblastoma", "fda_approved"),
+
+    # Anti-CD20 (lymphoma → leukemia)
+    ("rituximab", "lymphoma", "fda_approved"),
+    ("rituximab", "leukemia", "fda_approved"),
+
+    # ===================================================================
+    # PHASE 3 SUCCESSES
+    # Large randomized trials demonstrating significant benefit.
+    # ===================================================================
+    ("aspirin", "colorectal", "phase3_success"),
     ("zoledronic acid", "breast", "phase3_success"),
-    ("statins", "colorectal", "preclinical_validated"),
-    ("mebendazole", "glioblastoma", "preclinical_validated"),
-    ("niclosamide", "colorectal", "preclinical_validated"),
-    ("auranofin", "leukemia", "preclinical_validated"),
+    ("celecoxib", "colorectal", "phase3_success"),
+    ("clodronate", "breast", "phase3_success"),
+    ("pamidronate", "multiple myeloma", "phase3_success"),
+
+    # ===================================================================
+    # PHASE 2 POSITIVE
+    # Non-cancer drugs with positive Phase 2 clinical trial results
+    # demonstrating anticancer activity.
+    # ===================================================================
+
+    # Metformin (diabetes → multiple cancer types)
+    ("metformin", "breast", "phase2_positive"),
+    ("metformin", "colorectal", "phase2_positive"),
+    ("metformin", "endometrial", "phase2_positive"),
+    ("metformin", "prostate", "phase2_positive"),
+    ("metformin", "pancreatic", "phase2_positive"),
+    ("metformin", "ovarian", "phase2_positive"),
+    ("metformin", "lung", "phase2_positive"),
+
+    # Beta-blockers (cardiovascular → cancer)
+    ("propranolol", "melanoma", "phase2_positive"),
+    ("propranolol", "angiosarcoma", "phase2_positive"),
+
+    # Antifungals (Hedgehog/angiogenesis inhibition)
+    ("itraconazole", "lung", "phase2_positive"),
+    ("itraconazole", "prostate", "phase2_positive"),
+    ("itraconazole", "basal cell", "phase2_positive"),
+
+    # Autophagy inhibitors (antimalarials → cancer)
+    ("chloroquine", "glioblastoma", "phase2_positive"),
+    ("hydroxychloroquine", "pancreatic", "phase2_positive"),
+
+    # Anticonvulsants (HDAC inhibition)
+    ("valproic acid", "leukemia", "phase2_positive"),
+    ("valproic acid", "cervical", "phase2_positive"),
+
+    # Alcohol cessation (ALDH/proteasome inhibition)
+    ("disulfiram", "glioblastoma", "phase2_positive"),
+
+    # HIV antivirals (PI/AKT pathway inhibition)
     ("nelfinavir", "cervical", "phase2_positive"),
     ("ritonavir", "kaposi sarcoma", "phase2_positive"),
-    ("vorinostat", "cutaneous t-cell lymphoma", "fda_approved"),
-    ("arsenic trioxide", "acute promyelocytic leukemia", "fda_approved"),
-    ("dexamethasone", "multiple myeloma", "fda_approved"),
-    ("bortezomib", "mantle cell lymphoma", "fda_approved"),
+
+    # H2 receptor antagonist (immune modulation)
+    ("cimetidine", "colorectal", "phase2_positive"),
+
+    # Antimalarial (ROS/iron-mediated apoptosis)
+    ("artesunate", "colorectal", "phase2_positive"),
+
+    # Antipsychotics (dopamine receptor / cancer stem cells)
+    ("thioridazine", "leukemia", "phase2_positive"),
+
+    # Antibiotics (anti-angiogenic/immunomodulatory)
+    ("doxycycline", "lymphoma", "phase2_positive"),
+    ("clarithromycin", "multiple myeloma", "phase2_positive"),
+
+    # Antiparasitic (proteasome/NF-kB)
+    ("suramin", "prostate", "phase2_positive"),
+
+    # Antitussive (tubulin binding)
+    ("noscapine", "lung", "phase2_positive"),
+
+    # Rheumatoid arthritis (DHODH inhibition)
+    ("leflunomide", "prostate", "phase2_positive"),
+
+    # IBD drug (xCT transporter inhibition)
+    ("sulfasalazine", "glioblastoma", "phase2_positive"),
+
+    # Statins (mevalonate pathway inhibition)
+    ("simvastatin", "colorectal", "phase2_positive"),
+    ("lovastatin", "leukemia", "phase2_positive"),
+    ("atorvastatin", "breast", "phase2_positive"),
+
+    # NSAIDs (COX-2 / Wnt pathway)
+    ("celecoxib", "lung", "phase2_positive"),
+    ("indomethacin", "colorectal", "phase2_positive"),
+
+    # Antiparasitics (tubulin / Wnt / STAT3)
+    ("mebendazole", "colorectal", "phase2_positive"),
+    ("niclosamide", "prostate", "phase2_positive"),
+
+    # ===================================================================
+    # PRECLINICAL VALIDATED
+    # Strong in vitro/in vivo evidence published in peer-reviewed
+    # journals. Multiple independent studies confirming activity.
+    # ===================================================================
+
+    # Statins (generic class-level evidence)
+    ("statins", "colorectal", "preclinical_validated"),
+
+    # Benzimidazole anthelmintics
+    ("mebendazole", "glioblastoma", "preclinical_validated"),
+    ("albendazole", "hepatocellular", "preclinical_validated"),
+    ("flubendazole", "leukemia", "preclinical_validated"),
+    ("flubendazole", "melanoma", "preclinical_validated"),
+
+    # Halogenated salicylanilides
+    ("niclosamide", "colorectal", "preclinical_validated"),
+
+    # Gold compounds (thioredoxin reductase inhibition)
+    ("auranofin", "leukemia", "preclinical_validated"),
+    ("auranofin", "ovarian", "preclinical_validated"),
+
+    # Antiparasitic ionophore (Wnt pathway)
+    ("pyrvinium", "colorectal", "preclinical_validated"),
+
+    # Polyether antibiotic (cancer stem cells — Gupta et al. 2009 Cell)
+    ("salinomycin", "breast", "preclinical_validated"),
+
+    # Photosensitizer (YAP-TEAD pathway)
+    ("verteporfin", "hepatocellular", "preclinical_validated"),
+
+    # Metabolic modulator (PDK inhibition, Warburg effect)
+    ("dichloroacetate", "glioblastoma", "preclinical_validated"),
+
+    # Avermectin antiparasitic (WNT-TCF, PAK1, multiple pathways)
+    ("ivermectin", "breast", "preclinical_validated"),
+    ("ivermectin", "leukemia", "preclinical_validated"),
+
+    # Thiazolide antiparasitic (Wnt/glutaminolysis)
+    ("nitazoxanide", "colorectal", "preclinical_validated"),
+
+    # PPAR-alpha agonist (metabolic disruption)
+    ("fenofibrate", "glioblastoma", "preclinical_validated"),
+
+    # Antipsychotics (STAT5/dopamine receptor)
+    ("pimozide", "breast", "preclinical_validated"),
+    ("chlorpromazine", "glioblastoma", "preclinical_validated"),
+
+    # NSAID (COX-independent mechanisms)
+    ("piroxicam", "bladder", "preclinical_validated"),
+
+    # Cardiac glycoside (Na/K-ATPase, Src signaling)
+    ("digoxin", "prostate", "preclinical_validated"),
+
+    # Alcohol cessation drug (additional cancer types beyond GBM)
+    ("disulfiram", "breast", "preclinical_validated"),
+    ("disulfiram", "lung", "preclinical_validated"),
+
+    # mTOR inhibitor (additional cancer type)
+    ("rapamycin", "mantle cell lymphoma", "preclinical_validated"),
 ]
 
 
