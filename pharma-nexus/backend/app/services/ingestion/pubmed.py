@@ -149,7 +149,9 @@ class PubMedConnector(BaseConnector):
 
     async def _run_phase1(self, session: AsyncSession) -> int:
         """Find literature for drug-cancer pairs with pathway connections."""
-        # Find drug-cancer pairs sharing pathway targets
+        # Find drug-cancer pairs sharing pathway targets.
+        # The drug's target must share a pathway with a gene that is altered
+        # in the cancer type's molecular profile.
         pairs_query = text("""
             SELECT DISTINCT d.id AS drug_id, d.name AS drug_name,
                    ct.id AS cancer_type_id, ct.name AS cancer_name,
@@ -157,13 +159,10 @@ class PubMedConnector(BaseConnector):
             FROM drugs d
             JOIN drug_targets dt ON dt.drug_id = d.id
             JOIN pathway_targets pt ON pt.target_id = dt.target_id
-            JOIN cancer_molecular_profiles cmp ON cmp.cancer_type_id IS NOT NULL
+            JOIN pathway_targets pt2 ON pt2.pathway_id = pt.pathway_id
+            JOIN targets t2 ON t2.id = pt2.target_id
+            JOIN cancer_molecular_profiles cmp ON cmp.gene_symbol = t2.gene_symbol
             JOIN cancer_types ct ON ct.id = cmp.cancer_type_id
-            WHERE cmp.gene_symbol IN (
-                SELECT t2.gene_symbol FROM targets t2
-                JOIN pathway_targets pt2 ON pt2.target_id = t2.id
-                WHERE pt2.pathway_id = pt.pathway_id
-            )
             LIMIT 500
         """)
 
@@ -253,13 +252,24 @@ class PubMedConnector(BaseConnector):
     # Phase 3: Target-focused literature
     # ------------------------------------------------------------------
 
+    # Short gene symbols that are also common English words — require
+    # the full gene name to be present in the query to avoid false positives.
+    _AMBIGUOUS_GENE_SYMBOLS: set[str] = {
+        "MET", "RET", "SET", "CIC", "SRC", "FOS", "JUN", "KIT", "RAN",
+        "CAD", "GAS", "ACE", "ARC", "BAD", "BAG", "BAP", "BIN", "CAN",
+        "CAP", "DAB", "DAM", "DIS", "FAT", "GAP", "HIP", "MAX", "MAD",
+        "MAP", "NET", "NOR", "PAK", "PAX", "PER", "PIN", "PIT", "RAD",
+        "RAP", "SAG", "SEC", "SHE", "SKI", "SOS", "TAB", "TIP", "TOP",
+        "WAS",
+    }
+
     async def _run_phase3(self, session: AsyncSession) -> int:
         """Find literature for top drug targets in cancer contexts."""
-        # Get top 1000 most connected targets
+        # Get top 1000 most connected targets (with gene_name for disambiguation)
         result = await session.execute(
-            select(Target.id, Target.gene_symbol)
+            select(Target.id, Target.gene_symbol, Target.gene_name)
             .join(DrugTarget, DrugTarget.target_id == Target.id)
-            .group_by(Target.id, Target.gene_symbol)
+            .group_by(Target.id, Target.gene_symbol, Target.gene_name)
             .order_by(func.count(DrugTarget.id).desc())
             .limit(1000)
         )
@@ -267,13 +277,23 @@ class PubMedConnector(BaseConnector):
         logger.info("Phase 3: searching %d targets for cancer literature", len(targets))
 
         processed = 0
-        for target_id, gene_symbol in targets:
+        for target_id, gene_symbol, gene_name in targets:
             if not gene_symbol:
                 continue
 
+            # Skip ambiguous short symbols unless we have a gene name to disambiguate
+            if gene_symbol.upper() in self._AMBIGUOUS_GENE_SYMBOLS:
+                if gene_name:
+                    # Use the full gene name instead of the symbol
+                    gene_term = f'"{gene_name}"[Title/Abstract]'
+                else:
+                    continue
+            else:
+                gene_term = f"{gene_symbol}[Title/Abstract]"
+
             try:
                 query = (
-                    f"{gene_symbol}[Title/Abstract] AND "
+                    f"{gene_term} AND "
                     f"(cancer OR tumor) AND "
                     f"(therapeutic OR treatment OR inhibitor OR drug OR target)"
                 )
@@ -314,7 +334,7 @@ class PubMedConnector(BaseConnector):
     ) -> list[str]:
         """Search PubMed via esearch, return list of PMIDs."""
         await self._rate_limiter.acquire()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _do_search():
             kwargs: dict[str, Any] = {
@@ -344,7 +364,7 @@ class PubMedConnector(BaseConnector):
     ) -> list[dict[str, Any]]:
         """Fetch full PubMed records via efetch in batches of 200."""
         all_records: list[dict[str, Any]] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         for i in range(0, len(pmids), EFETCH_BATCH_SIZE):
             batch = pmids[i : i + EFETCH_BATCH_SIZE]
@@ -509,6 +529,9 @@ class PubMedConnector(BaseConnector):
         stored = 0
         for record in records:
             try:
+                # Derive relevance tags from MeSH terms
+                relevance_tags = self._derive_relevance_tags(record.get("mesh_terms", []))
+
                 # Upsert literature record
                 stmt = pg_insert(Literature.__table__).values(
                     pmid=record["pmid"],
@@ -519,6 +542,7 @@ class PubMedConnector(BaseConnector):
                     pub_date=record["pub_date"],
                     doi=record["doi"],
                     mesh_terms=record["mesh_terms"],
+                    relevance_tags=relevance_tags,
                 )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["pmid"],
@@ -530,6 +554,7 @@ class PubMedConnector(BaseConnector):
                         "pub_date": stmt.excluded.pub_date,
                         "doi": stmt.excluded.doi,
                         "mesh_terms": stmt.excluded.mesh_terms,
+                        "relevance_tags": stmt.excluded.relevance_tags,
                     },
                 )
                 await session.execute(stmt)
@@ -622,9 +647,13 @@ class PubMedConnector(BaseConnector):
         stmt = pg_insert(LiteratureDrug.__table__).values(
             literature_id=lit_id, drug_id=drug_id, mention_type=mention_type
         )
+        # Never downgrade: primary_subject > secondary > passing
         stmt = stmt.on_conflict_do_update(
             index_elements=["literature_id", "drug_id"],
-            set_={"mention_type": mention_type},
+            set_={"mention_type": text(
+                "CASE WHEN literature_drugs.mention_type = 'primary_subject' "
+                "THEN 'primary_subject' ELSE EXCLUDED.mention_type END"
+            )},
         )
         await session.execute(stmt)
 
@@ -637,7 +666,10 @@ class PubMedConnector(BaseConnector):
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["literature_id", "target_id"],
-            set_={"mention_type": mention_type},
+            set_={"mention_type": text(
+                "CASE WHEN literature_targets.mention_type = 'primary_subject' "
+                "THEN 'primary_subject' ELSE EXCLUDED.mention_type END"
+            )},
         )
         await session.execute(stmt)
 
@@ -651,6 +683,64 @@ class PubMedConnector(BaseConnector):
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["literature_id", "cancer_type_id"],
-            set_={"mention_type": mention_type},
+            set_={"mention_type": text(
+                "CASE WHEN literature_cancers.mention_type = 'primary_subject' "
+                "THEN 'primary_subject' ELSE EXCLUDED.mention_type END"
+            )},
         )
         await session.execute(stmt)
+
+    # ------------------------------------------------------------------
+    # Relevance tagging
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _derive_relevance_tags(mesh_terms: list[str]) -> list[str]:
+        """Derive relevance tags from MeSH terms for filtering.
+
+        Categories: drug_repurposing, clinical_trial, mechanism,
+        biomarker, resistance, combination_therapy, review
+        """
+        tags: set[str] = set()
+        mesh_lower = [m.lower() for m in mesh_terms]
+        mesh_joined = " ".join(mesh_lower)
+
+        if any(k in mesh_joined for k in [
+            "drug repositioning", "drug repurposing", "off-label use",
+        ]):
+            tags.add("drug_repurposing")
+
+        if any(k in mesh_joined for k in [
+            "clinical trial", "randomized controlled trial",
+            "controlled clinical trial",
+        ]):
+            tags.add("clinical_trial")
+
+        if any(k in mesh_joined for k in [
+            "drug resistance", "antineoplastic", "multidrug resistance",
+        ]):
+            tags.add("resistance")
+
+        if any(k in mesh_joined for k in [
+            "biomarker", "tumor marker", "prognosis",
+        ]):
+            tags.add("biomarker")
+
+        if any(k in mesh_joined for k in [
+            "signal transduction", "apoptosis", "cell proliferation",
+            "molecular targeted therapy", "protein kinase",
+        ]):
+            tags.add("mechanism")
+
+        if any(k in mesh_joined for k in [
+            "drug therapy, combination", "combined modality therapy",
+            "drug synergism",
+        ]):
+            tags.add("combination_therapy")
+
+        if any(k in mesh_joined for k in [
+            "review", "meta-analysis", "systematic review",
+        ]):
+            tags.add("review")
+
+        return sorted(tags)
