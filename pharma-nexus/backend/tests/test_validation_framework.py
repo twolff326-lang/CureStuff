@@ -2,16 +2,21 @@
 
 Tests the pure utility functions — AUC interpretation, calibration
 interpretation, weight recommendation generation, row attribute extraction,
-and ground truth constants.
+ground truth constants, negative controls, temporal cohorts, effect size
+interpretation, and robustness interpretation.
 """
 
 import pytest
 
 from app.services.validation_framework import (
     KNOWN_REPURPOSING_CASES,
+    KNOWN_REPURPOSING_FAILURES,
+    TEMPORAL_COHORTS,
     _generate_weight_recommendation,
     _interpret_auc,
     _interpret_calibration,
+    _interpret_effect_size,
+    _interpret_robustness,
     getattr_from_row,
 )
 
@@ -287,3 +292,195 @@ class TestKnownRepurposingCases:
         for entry in KNOWN_REPURPOSING_CASES:
             assert entry not in seen, f"Duplicate: {entry}"
             seen.add(entry)
+
+
+# ===================================================================
+# Negative Controls Constants
+# ===================================================================
+
+class TestKnownRepurposingFailures:
+    """Validate the KNOWN_REPURPOSING_FAILURES constant."""
+
+    def test_has_entries(self):
+        assert len(KNOWN_REPURPOSING_FAILURES) >= 25
+
+    def test_tuple_structure(self):
+        """Each entry should be (drug_fragment, cancer_fragment, failure_stage, reason)."""
+        for entry in KNOWN_REPURPOSING_FAILURES:
+            assert len(entry) == 4
+            drug, cancer, stage, reason = entry
+            assert isinstance(drug, str)
+            assert isinstance(cancer, str)
+            assert isinstance(stage, str)
+            assert isinstance(reason, str)
+
+    def test_valid_failure_stages(self):
+        valid = {"phase3_failed", "phase2_failed", "withdrawn"}
+        for _, _, stage, _ in KNOWN_REPURPOSING_FAILURES:
+            assert stage in valid, f"Invalid failure stage: {stage}"
+
+    def test_has_phase3_failures(self):
+        p3 = [c for c in KNOWN_REPURPOSING_FAILURES if c[2] == "phase3_failed"]
+        assert len(p3) >= 5
+
+    def test_has_phase2_failures(self):
+        p2 = [c for c in KNOWN_REPURPOSING_FAILURES if c[2] == "phase2_failed"]
+        assert len(p2) >= 10
+
+    def test_has_withdrawn(self):
+        wd = [c for c in KNOWN_REPURPOSING_FAILURES if c[2] == "withdrawn"]
+        assert len(wd) >= 2
+
+    def test_no_empty_strings(self):
+        for drug, cancer, stage, reason in KNOWN_REPURPOSING_FAILURES:
+            assert drug.strip() != ""
+            assert cancer.strip() != ""
+            assert stage.strip() != ""
+            assert reason.strip() != ""
+
+    def test_reasons_are_informative(self):
+        """Each failure should have a meaningful reason."""
+        for _, _, _, reason in KNOWN_REPURPOSING_FAILURES:
+            assert len(reason) >= 10, f"Reason too short: {reason}"
+
+    def test_no_duplicates(self):
+        seen = set()
+        for entry in KNOWN_REPURPOSING_FAILURES:
+            key = (entry[0], entry[1], entry[2])
+            assert key not in seen, f"Duplicate: {key}"
+            seen.add(key)
+
+    def test_well_known_failures_present(self):
+        """Check that notable trial failures are in the dataset."""
+        drugs_cancers = {(c[0], c[1]) for c in KNOWN_REPURPOSING_FAILURES}
+        # Bevacizumab breast cancer approval was famously withdrawn by FDA
+        assert ("bevacizumab", "breast") in drugs_cancers
+
+
+# ===================================================================
+# Temporal Cohorts Constants
+# ===================================================================
+
+class TestTemporalCohorts:
+    """Validate the TEMPORAL_COHORTS constant."""
+
+    def test_has_both_cohorts(self):
+        assert "established" in TEMPORAL_COHORTS
+        assert "recent" in TEMPORAL_COHORTS
+
+    def test_established_has_entries(self):
+        assert len(TEMPORAL_COHORTS["established"]) >= 20
+
+    def test_recent_has_entries(self):
+        assert len(TEMPORAL_COHORTS["recent"]) >= 20
+
+    def test_cohort_tuple_structure(self):
+        for cohort in ("established", "recent"):
+            for entry in TEMPORAL_COHORTS[cohort]:
+                assert len(entry) == 3
+                drug, cancer, level = entry
+                assert isinstance(drug, str)
+                assert isinstance(cancer, str)
+                assert level == "fda_approved"
+
+    def test_no_overlap_between_cohorts(self):
+        """Established and recent cohorts should not share drug-cancer pairs."""
+        established = {(e[0], e[1]) for e in TEMPORAL_COHORTS["established"]}
+        recent = {(r[0], r[1]) for r in TEMPORAL_COHORTS["recent"]}
+        overlap = established & recent
+        assert len(overlap) == 0, f"Overlapping pairs: {overlap}"
+
+    def test_all_in_ground_truth(self):
+        """All temporal cohort entries should also be in KNOWN_REPURPOSING_CASES."""
+        ground_truth_set = set(KNOWN_REPURPOSING_CASES)
+        for cohort in ("established", "recent"):
+            for entry in TEMPORAL_COHORTS[cohort]:
+                assert entry in ground_truth_set, (
+                    f"Temporal cohort entry not in ground truth: {entry}"
+                )
+
+    def test_no_duplicates_within_cohort(self):
+        for cohort in ("established", "recent"):
+            seen = set()
+            for entry in TEMPORAL_COHORTS[cohort]:
+                assert entry not in seen, f"Duplicate in {cohort}: {entry}"
+                seen.add(entry)
+
+
+# ===================================================================
+# Effect Size Interpretation
+# ===================================================================
+
+class TestInterpretEffectSize:
+    """Tests for _interpret_effect_size."""
+
+    def test_very_large(self):
+        assert "very large" in _interpret_effect_size(1.5)
+
+    def test_large(self):
+        assert "large" in _interpret_effect_size(0.9)
+
+    def test_medium(self):
+        assert "medium" in _interpret_effect_size(0.6)
+
+    def test_small(self):
+        assert "small" in _interpret_effect_size(0.3)
+
+    def test_negligible(self):
+        assert "negligible" in _interpret_effect_size(0.1)
+
+    def test_boundary_12(self):
+        assert "very large" in _interpret_effect_size(1.2)
+
+    def test_boundary_08(self):
+        assert "large" in _interpret_effect_size(0.8)
+
+    def test_boundary_05(self):
+        assert "medium" in _interpret_effect_size(0.5)
+
+    def test_boundary_02(self):
+        assert "small" in _interpret_effect_size(0.2)
+
+    def test_just_below_02(self):
+        assert "negligible" in _interpret_effect_size(0.19)
+
+    def test_negative_value(self):
+        """Negative Cohen's d should still be interpreted by magnitude."""
+        assert "large" in _interpret_effect_size(-1.0)
+
+    def test_zero(self):
+        assert "negligible" in _interpret_effect_size(0.0)
+
+
+# ===================================================================
+# Robustness Interpretation
+# ===================================================================
+
+class TestInterpretRobustness:
+    """Tests for _interpret_robustness."""
+
+    def test_highly_robust(self):
+        result = _interpret_robustness(0.85, 0.01, 0.75)
+        assert "highly robust" in result
+
+    def test_moderately_robust(self):
+        result = _interpret_robustness(0.80, 0.03, 0.60)
+        assert "moderately robust" in result
+
+    def test_somewhat_fragile(self):
+        result = _interpret_robustness(0.75, 0.07, 0.50)
+        assert "somewhat fragile" in result
+
+    def test_fragile(self):
+        result = _interpret_robustness(0.70, 0.15, 0.30)
+        assert "fragile" in result
+
+    def test_high_std_overrides(self):
+        """High std should indicate fragility even with good baseline."""
+        result = _interpret_robustness(0.90, 0.12, 0.40)
+        assert "fragile" in result
+
+    def test_low_min_prevents_highly_robust(self):
+        """Low minimum AUC should prevent 'highly robust' classification."""
+        result = _interpret_robustness(0.85, 0.01, 0.50)
+        assert "highly robust" not in result
