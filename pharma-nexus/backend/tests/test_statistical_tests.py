@@ -60,15 +60,21 @@ class TestFishersExactPathway:
         assert result["p_value"] == 1.0
         assert result["fold_enrichment"] == 0.0
 
-    def test_complete_overlap(self):
-        """All pathway genes are both drug targets and cancer genes."""
+    def test_complete_overlap_degenerate_table(self):
+        """All pathway genes are both drug targets and cancer genes.
+
+        When drug_targets==cancer_genes==pathway_size, the contingency table
+        becomes [[N,0],[0,0]] — a degenerate table where Fisher's exact returns
+        p=1.0 and odds_ratio=NaN (no variation to test against).
+        """
         result = fishers_exact_pathway(
             drug_targets_in_pathway=10,
             cancer_genes_in_pathway=10,
             pathway_size=10,
         )
-        assert result["p_value"] <= 1.0
-        assert result["fold_enrichment"] >= 1.0
+        assert result["p_value"] == 1.0  # Degenerate table → p=1.0
+        assert result["fold_enrichment"] == 1.0
+        assert result["significant"] is False
 
     def test_contingency_table_in_result(self):
         result = fishers_exact_pathway(
@@ -81,25 +87,52 @@ class TestFishersExactPathway:
         assert len(table) == 2
         assert len(table[0]) == 2
 
-    def test_large_genome_lowers_significance(self):
-        """Larger genome means co-occurrence is less surprising."""
+    def test_large_genome_produces_valid_p_values(self):
+        """Different genome sizes should still produce valid p-values.
+
+        Fisher's exact test uses the contingency table based on pathway_size,
+        not total_genome_size directly (the genome_size affects fold_enrichment).
+        Both results should be valid and significant for 3-of-20 overlap.
+        """
         small = fishers_exact_pathway(3, 3, 20, total_genome_size=100)
         large = fishers_exact_pathway(3, 3, 20, total_genome_size=20000)
-        # Both should return valid p-values; specific ordering depends on
-        # how contingency table is built, but both are valid.
-        assert 0 <= small["p_value"] <= 1
-        assert 0 <= large["p_value"] <= 1
+        assert 0 < small["p_value"] < 1, f"Expected valid p-value, got {small['p_value']}"
+        assert 0 < large["p_value"] < 1, f"Expected valid p-value, got {large['p_value']}"
+        # Both should agree on significance since Fisher's table is the same
+        assert small["p_value"] == large["p_value"]
 
-    def test_infinite_odds_ratio_capped(self):
-        """Infinity odds ratios should be capped to 999 or returned as NaN."""
-        # When d=0 in 2x2 table Fisher can return inf or NaN
+    def test_degenerate_table_odds_ratio_is_nan(self):
+        """When contingency table is [[N,0],[0,0]], scipy returns NaN odds ratio.
+
+        This is a known limitation: the production code caps inf to 999.0 but
+        NaN passes through since math.isinf(NaN) is False. The test documents
+        the actual behavior.
+        """
         result = fishers_exact_pathway(
             drug_targets_in_pathway=5,
             cancer_genes_in_pathway=5,
             pathway_size=5,
         )
-        # Either capped at 999, or NaN (both acceptable for degenerate tables)
-        assert result["odds_ratio"] <= 999.0 or math.isnan(result["odds_ratio"])
+        assert math.isnan(result["odds_ratio"]), (
+            f"Expected NaN for degenerate [[5,0],[0,0]] table, got {result['odds_ratio']}"
+        )
+
+    def test_inf_odds_ratio_capped_at_999(self):
+        """When Fisher's exact returns inf, production code caps at 999.0.
+
+        This happens with tables like [[a, 0], [c, d]] where b=0 and d>0.
+        """
+        # With dt=3, cg=3, pathway_size=5:
+        # a=min(3,3)=3, b=max(3-3,0)=0, c=max(3-3,0)=0, d=max(5-3-0-0,0)=2
+        # Table: [[3,0],[0,2]] → Fisher gives inf odds ratio
+        result = fishers_exact_pathway(
+            drug_targets_in_pathway=3,
+            cancer_genes_in_pathway=3,
+            pathway_size=5,
+        )
+        assert result["odds_ratio"] == 999.0, (
+            f"Expected 999.0 for inf-capped odds ratio, got {result['odds_ratio']}"
+        )
 
 
 # ===================================================================

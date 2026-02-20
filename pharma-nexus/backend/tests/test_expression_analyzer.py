@@ -33,7 +33,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=0,
         )
         assert result["label"] == "high"
-        assert result["score"] >= 60
+        # score = min(100, 60 + 3.0*5 + 40*0.5) = 95
+        assert result["score"] == 95
 
     def test_inhibitor_mildly_overexpressed_moderate(self, analyzer):
         """Inhibitor + mildly overexpressed = moderate."""
@@ -44,7 +45,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=0,
         )
         assert result["label"] == "moderate"
-        assert 30 <= result["score"] <= 70
+        # score = min(70, 30 + 1.5*10 + 15*0.8) = min(70, 57) = 57
+        assert result["score"] == 57
 
     def test_inhibitor_underexpressed_poor(self, analyzer):
         """Inhibitor + underexpressed target = poor match."""
@@ -55,7 +57,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=30,
         )
         assert result["label"] == "poor"
-        assert result["score"] <= 15
+        # score = max(0, 10 - abs(-2.0)*3) = max(0, 4) = 4
+        assert result["score"] == 4
 
     def test_inhibitor_normal_expression_low(self, analyzer):
         """Inhibitor + normal expression = low/uncertain."""
@@ -79,7 +82,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=40,
         )
         assert result["label"] == "high"
-        assert result["score"] >= 60
+        # score = min(100, 60 + abs(-3.0)*5 + 40*0.5) = 95
+        assert result["score"] == 95
 
     def test_agonist_mildly_underexpressed_moderate(self, analyzer):
         result = analyzer._compute_action_expression_compatibility(
@@ -99,7 +103,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=0,
         )
         assert result["label"] == "poor"
-        assert result["score"] <= 10
+        # score = max(0, 10 - 3.0*3) = 1
+        assert result["score"] == 1
 
     def test_agonist_normal_low(self, analyzer):
         result = analyzer._compute_action_expression_compatibility(
@@ -120,7 +125,8 @@ class TestActionExpressionCompatibility:
             frequency_underexpressed=0,
         )
         assert result["label"] == "unknown"
-        assert result["score"] > 15
+        # deviation=2.5 > 1.0 → score = min(50, 2.5*15) = 37.5 → round = 38
+        assert result["score"] == 38
 
     def test_unknown_action_no_deviation(self, analyzer):
         result = analyzer._compute_action_expression_compatibility(

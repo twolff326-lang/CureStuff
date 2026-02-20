@@ -6,7 +6,6 @@ Also tests the network distance BFS algorithm and overlap score computation.
 """
 
 import math
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,61 +22,79 @@ from app.services.statistical_tests import (
 # ===================================================================
 
 class TestOverlapScoreComputation:
-    """Tests for the overlap score computation formula used in get_pathway_overlap.
+    """Tests for the overlap score by driving the real statistical functions
+    that PathwayAnalyzer.get_pathway_overlap uses.
 
-    The overlap score in PathwayAnalyzer.get_pathway_overlap is computed as:
-      sig_component = (n_fdr_sig / shared_count) * 40
-      p_component   = min(-log10(best_p) / 20, 1) * 35
-      effect_component = min(phi * 2.5, 1) * 25
-      overlap_score = min(sig + p + effect, 100)
+    Instead of reimplementing the formula locally, we call the actual
+    fishers_exact_pathway, hypergeometric_enrichment, benjamini_hochberg,
+    and compute_effect_size functions and verify the score components.
     """
 
-    def test_no_shared_pathways_gives_zero(self):
-        """No shared pathways → overlap_score = 0."""
-        overlap_score = 0  # formula returns 0 when shared_count == 0
-        assert overlap_score == 0
+    def test_no_shared_pathways_gives_zero_via_bh(self):
+        """Empty p-value list → BH returns 0 significant."""
+        result = benjamini_hochberg([])
+        assert result["n_significant"] == 0
 
-    def test_all_fdr_significant_max_sig_component(self):
-        """All shared pathways are FDR-significant → sig_component = 40."""
-        n_fdr_sig = 5
-        shared_count = 5
-        sig_component = (n_fdr_sig / shared_count) * 40
-        assert sig_component == 40.0
+    def test_all_significant_gives_max_fdr_fraction(self):
+        """All very small p-values → n_significant / total == 1.0."""
+        pvals = [0.001, 0.002, 0.003, 0.004, 0.005]
+        result = benjamini_hochberg(pvals, alpha=0.05)
+        assert result["n_significant"] == len(pvals)
+        sig_fraction = result["n_significant"] / len(pvals)
+        assert sig_fraction == 1.0
 
-    def test_no_fdr_significant(self):
-        n_fdr_sig = 0
-        shared_count = 5
-        sig_component = (n_fdr_sig / shared_count) * 40
-        assert sig_component == 0.0
+    def test_no_significant_gives_zero_fdr_fraction(self):
+        """Large p-values → n_significant == 0."""
+        pvals = [0.5, 0.6, 0.7, 0.8, 0.9]
+        result = benjamini_hochberg(pvals, alpha=0.05)
+        assert result["n_significant"] == 0
 
-    def test_very_small_p_value_gives_high_p_component(self):
-        best_p = 1e-15
+    def test_very_small_p_from_fisher(self):
+        """Fisher's exact with high overlap → very small p-value."""
+        result = fishers_exact_pathway(8, 8, 20, total_genome_size=20000)
+        assert result["p_value"] < 0.001
+
+    def test_moderate_p_from_fisher(self):
+        """Fisher with modest overlap → moderate p-value."""
+        result = fishers_exact_pathway(1, 2, 100, total_genome_size=20000)
+        assert result["p_value"] > 0.001
+
+    def test_high_phi_from_effect_size(self):
+        """Highly overlapping gene sets → high phi coefficient."""
+        result = compute_effect_size(
+            drug_targets={"A", "B", "C"},
+            cancer_genes={"A", "B", "C"},
+            pathway_genes={"A", "B", "C", "D", "E"},
+        )
+        assert result["phi_coefficient"] > 0.4
+
+    def test_low_phi_from_effect_size(self):
+        """Non-overlapping gene sets → low phi."""
+        result = compute_effect_size(
+            drug_targets={"A"},
+            cancer_genes={"B"},
+            pathway_genes={"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"},
+        )
+        assert result["phi_coefficient"] < 0.3
+
+    def test_score_components_within_valid_ranges(self):
+        """Each score component should be within its documented range."""
+        # sig_component: [0, 40]
+        pvals = [0.001, 0.5, 0.9]
+        bh = benjamini_hochberg(pvals)
+        sig_fraction = bh["n_significant"] / len(pvals)
+        sig_component = sig_fraction * 40
+        assert 0 <= sig_component <= 40
+
+        # p_component: [0, 35]
+        best_p = pvals[0]
         p_component = min(-math.log10(max(best_p, 1e-20)) / 20.0, 1.0) * 35
-        assert p_component >= 25
+        assert 0 <= p_component <= 35
 
-    def test_moderate_p_value(self):
-        best_p = 0.01
-        p_component = min(-math.log10(max(best_p, 1e-20)) / 20.0, 1.0) * 35
-        # -log10(0.01) = 2, 2/20 = 0.1, * 35 = 3.5
-        assert abs(p_component - 3.5) < 0.1
-
-    def test_high_phi_coefficient(self):
-        phi = 0.8
-        effect_component = min(phi * 2.5, 1.0) * 25
-        assert effect_component == 25.0
-
-    def test_low_phi_coefficient(self):
-        phi = 0.1
-        effect_component = min(phi * 2.5, 1.0) * 25
-        assert abs(effect_component - 6.25) < 0.1
-
-    def test_full_score_capped_at_100(self):
-        """Even with maxed components, score should not exceed 100."""
-        sig = 40
-        p = 35
-        effect = 25
-        score = min(round(sig + p + effect), 100)
-        assert score == 100
+        # effect_component: [0, 25]
+        es = compute_effect_size({"A", "B"}, {"B", "C"}, {"A", "B", "C", "D"})
+        effect_component = min(es["phi_coefficient"] * 2.5, 1.0) * 25
+        assert 0 <= effect_component <= 25
 
 
 # ===================================================================
@@ -143,68 +160,57 @@ class TestStatisticalPipeline:
 # ===================================================================
 
 class TestNetworkDistanceBFS:
-    """Tests for the BFS algorithm used in get_network_distance.
+    """Tests for the BFS algorithm used in PathwayAnalyzer.get_network_distance.
 
-    Since the actual method requires DB access, we test the algorithmic
-    properties via reconstruction logic.
+    The actual method requires DB access, so we verify the structural
+    contract of its return values by inspecting the source code and testing
+    the pure-function entry point (same-gene short-circuit) via import.
     """
 
-    def test_same_gene_distance_zero(self):
-        """If gene_a == gene_b, distance should be 0."""
-        gene_a = "BRAF"
-        gene_b = "BRAF"
-        # Matches the logic in get_network_distance
-        if gene_a.upper() == gene_b.upper():
-            distance = 0
-            path = [gene_a.upper()]
-        assert distance == 0
-        assert path == ["BRAF"]
+    def test_return_contract_distance_field(self):
+        """get_network_distance should return dict with 'distance' key."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        # All return paths must include 'distance'
+        assert '"distance"' in source or "'distance'" in source
 
-    def test_max_depth_limits_search(self):
-        """BFS should not search deeper than max_depth."""
-        max_depth = 4
-        # The actual implementation limits to 4
-        assert max_depth == 4  # Documented behavior
+    def test_return_contract_path_field(self):
+        """get_network_distance should return dict with 'path' key."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        assert '"path"' in source or "'path'" in source
 
-    def test_path_reconstruction(self):
-        """Verify BFS path reconstruction algorithm."""
-        # Simulate visited dict: node -> parent
-        visited = {"A": None, "B": "A", "C": "B", "D": "C"}
-        target = "D"
+    def test_return_contract_min_interaction_score_field(self):
+        """get_network_distance should return dict with 'min_interaction_score' key."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        assert '"min_interaction_score"' in source or "'min_interaction_score'" in source
 
-        # Reconstruct path
-        path = []
-        current = target
-        while current is not None:
-            path.append(current)
-            current = visited[current]
-        path.reverse()
+    def test_same_gene_short_circuit_in_source(self):
+        """Source code handles gene_a == gene_b with distance=0."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        # The same-gene check: gene_a_upper == gene_b_upper → distance 0
+        assert "gene_a_upper == gene_b_upper" in source
+        assert '"distance": 0' in source or "'distance': 0" in source
 
-        assert path == ["A", "B", "C", "D"]
-        assert len(path) - 1 == 3  # 3 hops
+    def test_max_depth_is_4(self):
+        """BFS max_depth should be 4 per the documented behavior."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        assert "max_depth = 4" in source
 
-    def test_min_interaction_score_on_path(self):
-        """The weakest link on a path determines path quality."""
-        edge_scores = {
-            ("A", "B"): 900,
-            ("B", "C"): 450,
-            ("C", "D"): 800,
-        }
-        path = ["A", "B", "C", "D"]
-        min_score = float("inf")
-        for i in range(len(path) - 1):
-            pair = (path[i], path[i + 1])
-            score = edge_scores.get(pair, 0)
-            min_score = min(min_score, score)
-
-        assert min_score == 450  # The bottleneck is B→C
-
-    def test_no_path_returns_negative_one(self):
-        """If BFS exhausts search without finding target, distance = -1."""
-        found = False
-        if not found:
-            result = {"distance": -1, "path": [], "min_interaction_score": 0}
-        assert result["distance"] == -1
+    def test_no_path_returns_negative_one_in_source(self):
+        """When BFS finds no path, distance should be -1."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_network_distance)
+        assert '"distance": -1' in source or "'distance': -1" in source
 
 
 # ===================================================================
@@ -212,25 +218,22 @@ class TestNetworkDistanceBFS:
 # ===================================================================
 
 class TestDruggableNodeSorting:
-    """Test the sorting logic used in get_druggable_pathway_nodes."""
+    """Verify the sorting contract in get_druggable_pathway_nodes source."""
 
-    def test_direct_targets_sorted_first(self):
-        """Direct targets should come before indirect ones."""
-        nodes = [
-            {"drug_name": "DrugB", "is_direct_target": False},
-            {"drug_name": "DrugA", "is_direct_target": True},
-            {"drug_name": "DrugC", "is_direct_target": True},
-        ]
-        nodes.sort(key=lambda x: (not x["is_direct_target"], x["drug_name"]))
-        assert nodes[0]["is_direct_target"] is True
-        assert nodes[1]["is_direct_target"] is True
-        assert nodes[2]["is_direct_target"] is False
+    def test_source_sorts_by_direct_target_first(self):
+        """Production code should sort direct targets before indirect."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        source = inspect.getsource(PathwayAnalyzer.get_druggable_pathway_nodes)
+        # The sort should prioritize is_direct_target
+        assert "is_direct_target" in source
+        assert "sort" in source or "sorted" in source
 
-    def test_alphabetical_within_group(self):
-        nodes = [
-            {"drug_name": "Zoledronic", "is_direct_target": True},
-            {"drug_name": "Aspirin", "is_direct_target": True},
-        ]
-        nodes.sort(key=lambda x: (not x["is_direct_target"], x["drug_name"]))
-        assert nodes[0]["drug_name"] == "Aspirin"
-        assert nodes[1]["drug_name"] == "Zoledronic"
+    def test_source_returns_list(self):
+        """Return type annotation should indicate list."""
+        import inspect
+        from app.services.pathway_analyzer import PathwayAnalyzer
+        sig = inspect.signature(PathwayAnalyzer.get_druggable_pathway_nodes)
+        ret = sig.return_annotation
+        # Return annotation is list[dict[str, Any]]
+        assert "list" in str(ret).lower()
