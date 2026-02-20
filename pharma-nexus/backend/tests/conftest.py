@@ -218,6 +218,10 @@ def make_hypothesis(
     clinical_evidence_score: float = 30.0,
     safety_score: float = 70.0,
     novelty_score: float = 80.0,
+    causal_dependency_score: float = 0.0,
+    gnn_link_score: float = 0.0,
+    mutation_context_score: float = 0.0,
+    polypharmacology_score: float = 0.0,
     **kwargs,
 ) -> MagicMock:
     h = MagicMock()
@@ -232,6 +236,10 @@ def make_hypothesis(
     h.clinical_evidence_score = clinical_evidence_score
     h.safety_score = safety_score
     h.novelty_score = novelty_score
+    h.causal_dependency_score = causal_dependency_score
+    h.gnn_link_score = gnn_link_score
+    h.mutation_context_score = mutation_context_score
+    h.polypharmacology_score = polypharmacology_score
     for k, v in kwargs.items():
         setattr(h, k, v)
     return h
@@ -308,4 +316,5 @@ def pathway_data_high_overlap():
         "shared_count": 3,
         "total_drug_target_pathways": 4,
         "total_cancer_altered_pathways": 4,
+        "overlap_score": 60,
     }

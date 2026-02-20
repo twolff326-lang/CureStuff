@@ -351,7 +351,7 @@ async def get_ingestion_logs(
 
     # Get total count
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     # Get paginated results
     offset = (page - 1) * per_page

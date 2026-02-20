@@ -71,9 +71,12 @@ async def start_pipeline(
     else:
         enabled_phases = [key for key, _, _, default in PIPELINE_PHASES if default]
 
-    # Check no pipeline is already running
+    # Check no pipeline is already running (use FOR UPDATE to prevent race)
     existing = await db.execute(
-        select(PipelineRun).where(PipelineRun.status == "running").limit(1)
+        select(PipelineRun)
+        .where(PipelineRun.status == "running")
+        .with_for_update(skip_locked=True)
+        .limit(1)
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -104,7 +107,7 @@ async def start_pipeline(
     if request.llm_limit is not None:
         config["llm_limit"] = request.llm_limit
 
-    # Create the run record
+    # Create the run record (within the same transaction as the lock)
     run = PipelineRun(
         status="running",
         current_phase=None,

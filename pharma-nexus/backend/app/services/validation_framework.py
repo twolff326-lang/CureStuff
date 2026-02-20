@@ -577,6 +577,10 @@ class ValidationFramework:
                 Hypothesis.clinical_evidence_score,
                 Hypothesis.safety_score,
                 Hypothesis.novelty_score,
+                Hypothesis.causal_dependency_score,
+                Hypothesis.gnn_link_score,
+                Hypothesis.mutation_context_score,
+                Hypothesis.polypharmacology_score,
             )
         )
         hypotheses = result.all()
@@ -653,8 +657,14 @@ def getattr_from_row(row, dim: str) -> float:
         "clinical_evidence": 5,
         "safety": 6,
         "novelty": 7,
+        "causal_dependency": 8,
+        "gnn_link": 9,
+        "mutation_context": 10,
+        "polypharmacology": 11,
     }
-    idx = dim_index.get(dim, 2)
+    idx = dim_index.get(dim)
+    if idx is None:
+        return 0.0
     val = row[idx]
     return float(val) if val is not None else 0.0
 

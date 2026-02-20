@@ -498,7 +498,7 @@ def generate_embeddings(self):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(bind=True, name="app.tasks.ingest.analyze_literature_batch")
+@celery_app.task(bind=True, max_retries=3, name="app.tasks.ingest.analyze_literature_batch")
 def analyze_literature_batch(self, pmid_list=None, limit=1000):
     """Run Claude-based abstract extraction on un-analyzed papers.
 
@@ -540,7 +540,7 @@ def analyze_literature_batch(self, pmid_list=None, limit=1000):
 
     except Exception as exc:
         logger.error("Literature analysis failed: %s", exc)
-        return {"records_processed": 0, "errors_count": 1, "error": str(exc)}
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
 @celery_app.task(name="app.tasks.ingest.ingest_all_literature")

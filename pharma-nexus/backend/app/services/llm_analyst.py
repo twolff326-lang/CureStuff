@@ -397,12 +397,16 @@ class LLMAnalyst:
         drug_result = await session.execute(
             select(Drug).where(Drug.id == hypothesis.drug_id)
         )
-        drug = drug_result.scalar_one()
+        drug = drug_result.scalar_one_or_none()
+        if not drug:
+            return None
 
         cancer_result = await session.execute(
             select(CancerType).where(CancerType.id == hypothesis.cancer_type_id)
         )
-        cancer = cancer_result.scalar_one()
+        cancer = cancer_result.scalar_one_or_none()
+        if not cancer:
+            return None
 
         # Get mutations for this cancer
         mut_result = await session.execute(
@@ -569,7 +573,9 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
         data = await self._compose_narrative_data_package(hypothesis, session)
 
@@ -645,7 +651,9 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
         data = await self._compose_narrative_data_package(hypothesis, session)
 
@@ -731,7 +739,9 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
 
         # Get comparison hypotheses: same cancer or same drug
@@ -756,11 +766,15 @@ class LLMAnalyst:
         drug_result = await session.execute(
             select(Drug).where(Drug.id == hypothesis.drug_id)
         )
-        drug = drug_result.scalar_one()
+        drug = drug_result.scalar_one_or_none()
+        if not drug:
+            return None
         cancer_result = await session.execute(
             select(CancerType).where(CancerType.id == hypothesis.cancer_type_id)
         )
-        cancer = cancer_result.scalar_one()
+        cancer = cancer_result.scalar_one_or_none()
+        if not cancer:
+            return None
 
         # Build comparison data
         comp_data = []
@@ -768,7 +782,9 @@ class LLMAnalyst:
             comp_drug_result = await session.execute(
                 select(Drug).where(Drug.id == comp.drug_id)
             )
-            comp_drug = comp_drug_result.scalar_one()
+            comp_drug = comp_drug_result.scalar_one_or_none()
+            if not comp_drug:
+                continue
             comp_data.append({
                 "hypothesis_id": comp.id,
                 "drug_name": comp_drug.name,
@@ -843,17 +859,23 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
 
         drug_result = await session.execute(
             select(Drug).where(Drug.id == hypothesis.drug_id)
         )
-        drug = drug_result.scalar_one()
+        drug = drug_result.scalar_one_or_none()
+        if not drug:
+            return None
         cancer_result = await session.execute(
             select(CancerType).where(CancerType.id == hypothesis.cancer_type_id)
         )
-        cancer = cancer_result.scalar_one()
+        cancer = cancer_result.scalar_one_or_none()
+        if not cancer:
+            return None
 
         # Gather papers from multiple angles
         pair_papers, target_papers, pathway_papers = await asyncio.gather(
@@ -922,7 +944,9 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
         data = await self._compose_narrative_data_package(hypothesis, session)
 
@@ -989,7 +1013,9 @@ class LLMAnalyst:
         hyp_result = await session.execute(
             select(Hypothesis).where(Hypothesis.id == hypothesis_id)
         )
-        hypothesis = hyp_result.scalar_one()
+        hypothesis = hyp_result.scalar_one_or_none()
+        if not hypothesis:
+            return {"error": "Hypothesis not found"}
         model = self._select_model(hypothesis)
         data = await self._compose_narrative_data_package(hypothesis, session)
 

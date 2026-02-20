@@ -91,16 +91,21 @@ async def get_cancer_trials(
     # Use a raw text query for JSONB array containment
     from sqlalchemy import text
 
-    query = select(ClinicalTrial).where(
-        ClinicalTrial.conditions.cast(
-            type_=func.text()
-        ).ilike(f"%{ct_row[1]}%")
-    )
+    condition_filter = ClinicalTrial.conditions.cast(
+        type_=func.text()
+    ).ilike(f"%{ct_row[1]}%")
+
+    query = select(ClinicalTrial).where(condition_filter)
+    count_q = select(func.count(ClinicalTrial.id)).where(condition_filter)
 
     if status:
         query = query.where(ClinicalTrial.status == status)
+        count_q = count_q.where(ClinicalTrial.status == status)
     if phase:
         query = query.where(ClinicalTrial.phase == phase)
+        count_q = count_q.where(ClinicalTrial.phase == phase)
+
+    total = (await session.execute(count_q)).scalar_one()
 
     result = await session.execute(
         query.order_by(desc(ClinicalTrial.start_date))
@@ -111,7 +116,7 @@ async def get_cancer_trials(
 
     return {
         "trials": [_trial_summary(t) for t in trials],
-        "total": len(trials),
+        "total": total,
         "page": page,
         "page_size": page_size,
     }

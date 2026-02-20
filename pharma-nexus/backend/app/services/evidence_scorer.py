@@ -1195,6 +1195,495 @@ class EvidenceScorer:
             },
         }
 
+    # ------------------------------------------------------------------
+    # 9. Mutation-Context Score
+    # ------------------------------------------------------------------
+
+    async def score_mutation_context(
+        self,
+        drug_id: int,
+        cancer_type_id: int,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        """Score mutation-conditional vulnerability.
+
+        Detects cases where a drug target becomes essential BECAUSE of a
+        specific mutation in the cancer. This catches findings like:
+        - Metformin (AMPK activator) + TP53-mutant pancreatic cancer
+        - Disulfiram + KRAS-mutant lung cancer
+
+        Logic:
+          For each drug target Gene_T:
+            1. Check if Gene_T is essential in DepMap (gene_effect < -0.5)
+            2. Find driver mutations in this cancer (frequency > 5%)
+            3. Check if any mutated gene Gene_M is in the SAME PATHWAY as Gene_T
+               or INTERACTS with Gene_T via PPI (STRING score >= 700)
+            4. Bonus if Gene_T is selectively essential (not essential everywhere)
+
+        This approximates conditional synthetic lethality: Gene_M mutation
+        creates a dependency on Gene_T's pathway, and the drug inhibits Gene_T.
+
+        Score components (each 0-100, combined):
+          - pathway_cooccurrence: mutated + essential genes share pathways (40)
+          - ppi_proximity:        mutated gene interacts with essential target (25)
+          - selectivity:          drug target is selectively essential (20)
+          - driver_frequency:     how prevalent the co-occurring mutation is (15)
+        """
+        from app.models.mutation import Mutation
+        from app.models.target import ProteinInteraction
+
+        # Get cancer lineage for DepMap
+        cancer_result = await db.execute(
+            select(CancerType.name, CancerType.tissue, CancerType.organ).where(
+                CancerType.id == cancer_type_id
+            )
+        )
+        cancer_row = cancer_result.first()
+        if not cancer_row:
+            return {"score": 0, "details": {"reason": "cancer_not_found"}, "evidence": []}
+
+        lineage = _cancer_to_depmap_lineage(
+            cancer_row.name, cancer_row.tissue, cancer_row.organ
+        )
+
+        # Get drug targets + their DepMap essentiality
+        target_result = await db.execute(
+            select(Target.gene_symbol, Target.uniprot_id, DrugTarget.action_type)
+            .join(DrugTarget, DrugTarget.target_id == Target.id)
+            .where(DrugTarget.drug_id == drug_id)
+        )
+        drug_targets = target_result.all()
+        if not drug_targets:
+            return {"score": 0, "details": {"reason": "no_targets"}, "evidence": []}
+
+        target_genes = {t[0] for t in drug_targets if t[0]}
+        target_uniprots = {t[1] for t in drug_targets if t[1]}
+
+        dep_result = await db.execute(
+            select(GeneDependency).where(
+                GeneDependency.gene_symbol.in_(target_genes),
+                GeneDependency.lineage == lineage,
+                GeneDependency.gene_effect < -0.5,
+            )
+        )
+        essential_deps = {d.gene_symbol: d for d in dep_result.scalars().all()}
+
+        if not essential_deps:
+            return {
+                "score": 0,
+                "details": {"reason": "no_essential_targets", "lineage": lineage},
+                "evidence": [],
+            }
+
+        # Get driver mutations in this cancer (frequency > 5%)
+        mut_result = await db.execute(
+            select(
+                Mutation.gene_symbol,
+                func.max(Mutation.frequency_percent).label("max_freq"),
+            )
+            .where(
+                Mutation.cancer_type_id == cancer_type_id,
+                Mutation.frequency_percent > 5.0,
+            )
+            .group_by(Mutation.gene_symbol)
+            .order_by(func.max(Mutation.frequency_percent).desc())
+            .limit(50)
+        )
+        driver_mutations = {row[0]: row[1] for row in mut_result.all() if row[0]}
+
+        if not driver_mutations:
+            return {
+                "score": 0,
+                "details": {"reason": "no_driver_mutations"},
+                "evidence": [],
+            }
+
+        mutated_genes = set(driver_mutations.keys())
+
+        # --- Component 1: Pathway co-occurrence (up to 40 pts) ---
+        # Check if essential drug targets share pathways with mutated genes
+        target_pw_result = await db.execute(
+            select(PathwayTarget.pathway_id, Target.gene_symbol)
+            .join(Target, PathwayTarget.target_id == Target.id)
+            .where(Target.gene_symbol.in_(essential_deps.keys()))
+        )
+        target_pathways: dict[str, set[int]] = {}
+        for pw_id, gene in target_pw_result.all():
+            target_pathways.setdefault(gene, set()).add(pw_id)
+
+        mut_pw_result = await db.execute(
+            select(PathwayTarget.pathway_id, Target.gene_symbol)
+            .join(Target, PathwayTarget.target_id == Target.id)
+            .where(Target.gene_symbol.in_(mutated_genes))
+        )
+        mutation_pathways: dict[str, set[int]] = {}
+        for pw_id, gene in mut_pw_result.all():
+            mutation_pathways.setdefault(gene, set()).add(pw_id)
+
+        # Find co-occurring pairs: essential target + mutated gene in same pathway
+        cooccurrences = []
+        for target_gene, target_pws in target_pathways.items():
+            for mut_gene, mut_pws in mutation_pathways.items():
+                shared_pws = target_pws & mut_pws
+                if shared_pws and target_gene != mut_gene:
+                    cooccurrences.append({
+                        "target_gene": target_gene,
+                        "mutated_gene": mut_gene,
+                        "shared_pathway_count": len(shared_pws),
+                        "mutation_frequency": driver_mutations.get(mut_gene, 0),
+                        "gene_effect": essential_deps[target_gene].gene_effect,
+                    })
+
+        pw_score = min(len(cooccurrences) * 10, 40) if cooccurrences else 0
+
+        # --- Component 2: PPI proximity (up to 25 pts) ---
+        ppi_hits = []
+        if target_uniprots:
+            mut_uniprot_result = await db.execute(
+                select(Target.uniprot_id, Target.gene_symbol).where(
+                    Target.gene_symbol.in_(mutated_genes),
+                    Target.uniprot_id.isnot(None),
+                )
+            )
+            mut_uniprots = {row[0]: row[1] for row in mut_uniprot_result.all() if row[0]}
+
+            if mut_uniprots:
+                for up_t in list(target_uniprots)[:15]:
+                    int_result = await db.execute(
+                        select(
+                            ProteinInteraction.protein_a_uniprot,
+                            ProteinInteraction.protein_b_uniprot,
+                            ProteinInteraction.interaction_score,
+                        ).where(
+                            (
+                                (ProteinInteraction.protein_a_uniprot == up_t)
+                                & (ProteinInteraction.protein_b_uniprot.in_(mut_uniprots.keys()))
+                            ) | (
+                                (ProteinInteraction.protein_b_uniprot == up_t)
+                                & (ProteinInteraction.protein_a_uniprot.in_(mut_uniprots.keys()))
+                            ),
+                            ProteinInteraction.interaction_score >= 700,
+                        ).limit(10)
+                    )
+                    for row in int_result.all():
+                        mut_up = row[1] if row[0] == up_t else row[0]
+                        ppi_hits.append({
+                            "target_uniprot": up_t,
+                            "mutated_uniprot": mut_up,
+                            "mutated_gene": mut_uniprots.get(mut_up, "?"),
+                            "interaction_score": row[2],
+                        })
+
+        ppi_score = min(len(ppi_hits) * 8, 25)
+
+        # --- Component 3: Selectivity (up to 20 pts) ---
+        selective_essential = sum(
+            1 for d in essential_deps.values() if d.is_strongly_selective == 1
+        )
+        selectivity_score = min(selective_essential * 10, 20)
+
+        # --- Component 4: Driver frequency (up to 15 pts) ---
+        # Higher frequency mutations = more clinically relevant context
+        involved_freqs = []
+        for co in cooccurrences:
+            involved_freqs.append(co["mutation_frequency"])
+        for hit in ppi_hits:
+            gene = hit["mutated_gene"]
+            if gene in driver_mutations:
+                involved_freqs.append(driver_mutations[gene])
+
+        if involved_freqs:
+            max_freq = max(involved_freqs)
+            freq_score = min(round(max_freq / 100 * 15), 15)
+        else:
+            freq_score = 0
+
+        score = min(pw_score + ppi_score + selectivity_score + freq_score, 100)
+
+        # Build evidence
+        evidence = []
+        for co in cooccurrences[:3]:
+            evidence.append({
+                "evidence_type": "mutation_context",
+                "source_type": "pathway_mutation_cooccurrence",
+                "source_id": f"{co['target_gene']}__{co['mutated_gene']}",
+                "description": (
+                    f"Drug target {co['target_gene']} (essential, gene_effect="
+                    f"{co['gene_effect']:.2f}) shares {co['shared_pathway_count']} "
+                    f"pathway(s) with mutated {co['mutated_gene']} "
+                    f"(frequency={co['mutation_frequency']:.1f}%). "
+                    f"Mutation may create conditional dependency on drug target."
+                ),
+                "strength": "strong" if co["shared_pathway_count"] >= 3 else "moderate",
+                "confidence": min(co["mutation_frequency"] / 100, 1.0),
+                "raw_data": co,
+            })
+
+        for hit in ppi_hits[:2]:
+            evidence.append({
+                "evidence_type": "mutation_context",
+                "source_type": "ppi_mutation_proximity",
+                "source_id": f"{hit['target_uniprot']}__{hit['mutated_uniprot']}",
+                "description": (
+                    f"Drug target interacts with mutated {hit['mutated_gene']} "
+                    f"(STRING score={hit['interaction_score']:.0f}). "
+                    f"Physical interaction suggests functional dependency."
+                ),
+                "strength": "moderate",
+                "confidence": min((hit.get("interaction_score", 0) or 0) / 1000, 1.0),
+                "raw_data": hit,
+            })
+
+        return {
+            "score": score,
+            "details": {
+                "lineage": lineage,
+                "essential_drug_targets": list(essential_deps.keys()),
+                "driver_mutations_checked": len(driver_mutations),
+                "pathway_cooccurrences": len(cooccurrences),
+                "ppi_interactions": len(ppi_hits),
+                "selective_essential_targets": selective_essential,
+                "score_components": {
+                    "pathway_cooccurrence": pw_score,
+                    "ppi_proximity": ppi_score,
+                    "selectivity": selectivity_score,
+                    "driver_frequency": freq_score,
+                },
+            },
+            "evidence": evidence,
+        }
+
+    # ------------------------------------------------------------------
+    # 10. Polypharmacology Score (Off-Target Activity)
+    # ------------------------------------------------------------------
+
+    async def score_polypharmacology(
+        self,
+        drug_id: int,
+        cancer_type_id: int,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        """Score off-target activity against cancer-relevant proteins.
+
+        Detects cases where a drug has experimentally observed bioassay
+        activity against targets beyond its official DrugTarget entries.
+        This catches findings like disulfiram having activity against
+        ferroptosis-related targets, not just its official target ALDH2.
+
+        Data sources:
+          - Bioassay table: PubChem screening data (drug_id -> target_id)
+            with activity_outcome = "active"
+          - CancerMolecularProfile: overexpressed/underexpressed genes
+          - Mutations: altered genes in the cancer
+
+        Logic:
+          1. Find all bioassay-active targets for this drug that are NOT
+             in the official DrugTarget table
+          2. Check if any of these off-targets are cancer-relevant:
+             - Overexpressed/underexpressed in this cancer
+             - Mutated in this cancer
+             - Essential in DepMap for this lineage
+          3. Score based on:
+             - Number of cancer-relevant off-targets (up to 35 pts)
+             - Best bioassay potency against a cancer target (up to 30 pts)
+             - Off-target is essential in DepMap (up to 20 pts)
+             - Expression alignment (off-target is overexpressed + drug
+               shows inhibitory activity in bioassay) (up to 15 pts)
+        """
+        # Get official drug targets to exclude them
+        official_result = await db.execute(
+            select(DrugTarget.target_id).where(DrugTarget.drug_id == drug_id)
+        )
+        official_target_ids = {row[0] for row in official_result.all()}
+
+        # Get all bioassay-active targets for this drug (excluding official targets)
+        assay_result = await db.execute(
+            select(
+                Bioassay.target_id,
+                Target.gene_symbol,
+                Bioassay.activity_value,
+                Bioassay.activity_type,
+                Bioassay.activity_outcome,
+            )
+            .join(Target, Bioassay.target_id == Target.id)
+            .where(
+                Bioassay.drug_id == drug_id,
+                Bioassay.activity_outcome == "active",
+                Bioassay.target_id.isnot(None),
+            )
+        )
+        all_hits = assay_result.all()
+
+        # Filter to off-targets only
+        off_target_hits: dict[str, dict] = {}
+        for target_id, gene, activity_val, activity_type, _ in all_hits:
+            if target_id in official_target_ids:
+                continue
+            if gene not in off_target_hits or (
+                activity_val and activity_val < (off_target_hits[gene].get("best_value") or float("inf"))
+            ):
+                off_target_hits[gene] = {
+                    "target_id": target_id,
+                    "gene_symbol": gene,
+                    "best_value": activity_val,
+                    "activity_type": activity_type,
+                }
+
+        if not off_target_hits:
+            return {
+                "score": 0,
+                "details": {"reason": "no_off_target_bioassay_hits"},
+                "evidence": [],
+            }
+
+        off_target_genes = set(off_target_hits.keys())
+
+        # Check cancer relevance of off-targets
+        # 1. Expression profiles
+        expr_result = await db.execute(
+            select(CancerMolecularProfile).where(
+                CancerMolecularProfile.cancer_type_id == cancer_type_id,
+                CancerMolecularProfile.gene_symbol.in_(off_target_genes),
+            )
+        )
+        cancer_expr = {p.gene_symbol: p for p in expr_result.scalars().all()}
+
+        # 2. Mutations
+        from app.models.mutation import Mutation
+
+        mut_result = await db.execute(
+            select(Mutation.gene_symbol).where(
+                Mutation.cancer_type_id == cancer_type_id,
+                Mutation.gene_symbol.in_(off_target_genes),
+            ).distinct()
+        )
+        cancer_mutated = {row[0] for row in mut_result.all() if row[0]}
+
+        # 3. DepMap essentiality
+        cancer_result = await db.execute(
+            select(CancerType.name, CancerType.tissue, CancerType.organ).where(
+                CancerType.id == cancer_type_id
+            )
+        )
+        cancer_row = cancer_result.first()
+        lineage = _cancer_to_depmap_lineage(
+            cancer_row.name, cancer_row.tissue, cancer_row.organ
+        ) if cancer_row else "unknown"
+
+        dep_result = await db.execute(
+            select(GeneDependency).where(
+                GeneDependency.gene_symbol.in_(off_target_genes),
+                GeneDependency.lineage == lineage,
+                GeneDependency.gene_effect < -0.5,
+            )
+        )
+        essential_off_targets = {d.gene_symbol: d for d in dep_result.scalars().all()}
+
+        # Identify cancer-relevant off-targets
+        cancer_relevant = []
+        for gene, hit in off_target_hits.items():
+            relevance = []
+            if gene in cancer_expr:
+                profile = cancer_expr[gene]
+                relevance.append(f"{profile.alteration_type} (z={profile.expression_zscore:.1f})")
+            if gene in cancer_mutated:
+                relevance.append("mutated")
+            if gene in essential_off_targets:
+                dep = essential_off_targets[gene]
+                relevance.append(f"essential (effect={dep.gene_effect:.2f})")
+
+            if relevance:
+                cancer_relevant.append({
+                    **hit,
+                    "relevance": relevance,
+                    "is_expressed": gene in cancer_expr,
+                    "is_mutated": gene in cancer_mutated,
+                    "is_essential": gene in essential_off_targets,
+                })
+
+        if not cancer_relevant:
+            return {
+                "score": 0,
+                "details": {
+                    "reason": "off_targets_not_cancer_relevant",
+                    "total_off_targets": len(off_target_hits),
+                },
+                "evidence": [],
+            }
+
+        # --- Component 1: Cancer-relevant off-target count (up to 35) ---
+        count_score = min(len(cancer_relevant) * 8, 35)
+
+        # --- Component 2: Best bioassay potency (up to 30) ---
+        best_potency = 0
+        for hit in cancer_relevant:
+            val = hit.get("best_value")
+            if val and val > 0:
+                pki = 9.0 - math.log10(val)
+                potency = max(min((pki - 5.0) / 4.0, 1.0), 0.0)
+                best_potency = max(best_potency, potency)
+        potency_score = round(best_potency * 30)
+
+        # --- Component 3: Essential off-targets (up to 20) ---
+        essential_count = sum(1 for h in cancer_relevant if h["is_essential"])
+        essential_score = min(essential_count * 10, 20)
+
+        # --- Component 4: Expression alignment (up to 15) ---
+        alignment_score = 0
+        for hit in cancer_relevant:
+            gene = hit["gene_symbol"]
+            if gene in cancer_expr:
+                profile = cancer_expr[gene]
+                zscore = profile.expression_zscore or 0
+                # Active bioassay typically means inhibition — aligned with overexpression
+                if zscore > 2.0:
+                    alignment_score = min(alignment_score + 5, 15)
+
+        score = min(count_score + potency_score + essential_score + alignment_score, 100)
+
+        evidence = []
+        for hit in cancer_relevant[:5]:
+            evidence.append({
+                "evidence_type": "polypharmacology",
+                "source_type": "bioassay_off_target",
+                "source_id": f"off_target_{hit['gene_symbol']}",
+                "description": (
+                    f"Off-target activity: drug shows bioassay activity against "
+                    f"{hit['gene_symbol']} (not an official target). "
+                    f"Cancer relevance: {', '.join(hit['relevance'])}."
+                    + (f" Potency: {hit['best_value']:.0f}nM" if hit.get("best_value") else "")
+                ),
+                "strength": "strong" if hit["is_essential"] else "moderate",
+                "confidence": 0.7 if hit["is_essential"] else 0.5,
+                "raw_data": {
+                    "gene_symbol": hit["gene_symbol"],
+                    "best_activity_value": hit.get("best_value"),
+                    "activity_type": hit.get("activity_type"),
+                    "relevance": hit["relevance"],
+                },
+            })
+
+        return {
+            "score": score,
+            "details": {
+                "total_off_targets": len(off_target_hits),
+                "cancer_relevant_off_targets": len(cancer_relevant),
+                "essential_off_targets": essential_count,
+                "lineage": lineage,
+                "score_components": {
+                    "count": count_score,
+                    "potency": potency_score,
+                    "essential": essential_score,
+                    "alignment": alignment_score,
+                },
+            },
+            "evidence": evidence,
+        }
+
+    # ------------------------------------------------------------------
+    # Composite scoring
+    # ------------------------------------------------------------------
+
     async def score_all_dimensions(
         self,
         drug_id: int,
@@ -1202,13 +1691,16 @@ class EvidenceScorer:
         db: AsyncSession,
         pathway_data: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Score all 8 dimensions for a drug-cancer pair.
+        """Score all 10 dimensions for a drug-cancer pair.
 
         Returns a dict keyed by dimension name, each containing:
           {"score": int, "details": dict, "evidence": list}
 
-        The 8th dimension (gnn_link) is the GNN-predicted link score.
-        It returns 0 if no GNN model has been trained yet.
+        Dimensions:
+          1-7: Original dimensions
+          8: GNN link prediction
+          9: Mutation-context (conditional vulnerability via mutations)
+          10: Polypharmacology (off-target bioassay activity)
         """
         results = {}
 
@@ -1234,6 +1726,12 @@ class EvidenceScorer:
             drug_id, cancer_type_id, db
         )
         results["gnn_link"] = await self.score_gnn_link(
+            drug_id, cancer_type_id, db
+        )
+        results["mutation_context"] = await self.score_mutation_context(
+            drug_id, cancer_type_id, db
+        )
+        results["polypharmacology"] = await self.score_polypharmacology(
             drug_id, cancer_type_id, db
         )
 

@@ -218,8 +218,11 @@ async def health_check():
     try:
         import redis as redis_lib
         r = redis_lib.from_url(settings.redis_url, socket_timeout=2)
-        r.ping()
-        checks["checks"]["redis"] = "ok"
+        try:
+            r.ping()
+            checks["checks"]["redis"] = "ok"
+        finally:
+            r.close()
     except Exception as e:
         checks["checks"]["redis"] = f"error: {e.__class__.__name__}"
         checks["status"] = "degraded"

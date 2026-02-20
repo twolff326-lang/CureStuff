@@ -126,23 +126,32 @@ def cache_gnn_predictions(self, run_id=None):
                 cancers = await session.execute(select(CancerType.id))
                 cancer_ids = [r[0] for r in cancers.all()]
 
-                # Generate predictions
+                # Generate predictions in batches to bound memory
                 count = 0
+                batch: list[dict] = []
                 for drug_id in drug_ids:
                     for cancer_id in cancer_ids:
                         score = predictor.predict_link_score(drug_id, cancer_id)
                         if score is not None and score > 0.1:
-                            session.add(GNNPrediction(
-                                run_id=run_id,
-                                drug_id=drug_id,
-                                cancer_type_id=cancer_id,
-                                gnn_score=score,
-                            ))
+                            batch.append({
+                                "run_id": run_id,
+                                "drug_id": drug_id,
+                                "cancer_type_id": cancer_id,
+                                "gnn_score": score,
+                            })
                             count += 1
 
-                    if count % 1000 == 0 and count > 0:
-                        await session.flush()
+                        if len(batch) >= 500:
+                            await session.execute(
+                                GNNPrediction.__table__.insert(), batch
+                            )
+                            await session.flush()
+                            batch.clear()
 
+                if batch:
+                    await session.execute(
+                        GNNPrediction.__table__.insert(), batch
+                    )
                 await session.commit()
                 return {"status": "completed", "predictions_cached": count, "run_id": run_id}
 

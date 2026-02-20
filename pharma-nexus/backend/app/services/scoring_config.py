@@ -29,19 +29,24 @@ DIMENSIONS = [
     "novelty",
     "causal_dependency",
     "gnn_link",
+    "mutation_context",
+    "polypharmacology",
 ]
 
 # In-memory fallback if database is not seeded yet.
 # gnn_link starts at 0.0 — activates once a GNN model is trained.
+# mutation_context and polypharmacology redistribute weight from other dims.
 DEFAULT_WEIGHTS = {
-    "pathway_overlap": 0.17,
-    "expression_correlation": 0.17,
-    "literature_support": 0.15,
-    "clinical_evidence": 0.13,
-    "safety": 0.08,
-    "novelty": 0.12,
-    "causal_dependency": 0.18,
+    "pathway_overlap": 0.14,
+    "expression_correlation": 0.14,
+    "literature_support": 0.12,
+    "clinical_evidence": 0.10,
+    "safety": 0.07,
+    "novelty": 0.10,
+    "causal_dependency": 0.13,
     "gnn_link": 0.0,
+    "mutation_context": 0.12,
+    "polypharmacology": 0.08,
 }
 
 
@@ -243,10 +248,9 @@ class ScoringConfig:
         Missing dimensions are auto-added with weight 0.
         """
         # Auto-add missing dimensions for legacy presets
-        if "causal_dependency" not in weights:
-            weights["causal_dependency"] = 0.0
-        if "gnn_link" not in weights:
-            weights["gnn_link"] = 0.0
+        for dim in ("causal_dependency", "gnn_link", "mutation_context", "polypharmacology"):
+            if dim not in weights:
+                weights[dim] = 0.0
 
         missing = set(DIMENSIONS) - set(weights.keys())
         if missing:

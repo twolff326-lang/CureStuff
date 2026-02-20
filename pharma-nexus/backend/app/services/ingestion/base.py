@@ -33,7 +33,6 @@ class RateLimiter:
 
     def __init__(self, requests_per_second: float):
         self._rate = requests_per_second
-        self._semaphore = asyncio.Semaphore(max(1, int(requests_per_second)))
         self._min_interval = 1.0 / requests_per_second if requests_per_second > 0 else 0
         self._last_request_time: float = 0.0
         self._lock = asyncio.Lock()
@@ -375,12 +374,12 @@ class BaseConnector(ABC):
             Summary dict with records_processed, errors count, status.
         """
         owns_session = self._external_session is None
-        session = self._external_session or async_session_factory()
+        if owns_session:
+            session = async_session_factory()
+        else:
+            session = self._external_session
 
         try:
-            if owns_session:
-                # For owned sessions, we manage the context manually
-                session = async_session_factory()
 
             self._log_id = await self._create_log(session, task_type)
             await session.commit()
