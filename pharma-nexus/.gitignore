@@ -19,6 +19,7 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
+backend/package-lock.json
 
 # IDE
 .vscode/
