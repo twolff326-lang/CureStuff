@@ -87,6 +87,9 @@ export default function DataSourcesPage() {
   const [startingSource, setStartingSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<string | null>(null);
 
   // Track whether any source is currently running so we can poll faster
   const anyRunning = Object.values(statuses).some(
@@ -155,6 +158,28 @@ export default function DataSourcesPage() {
       );
     } finally {
       setStartingSource(null);
+    }
+  };
+
+  // ---- Kill switch: full reset ----------------------------------
+  const handleResetAll = async () => {
+    setResetting(true);
+    setError(null);
+    setResetResult(null);
+    try {
+      const data = await fetchApi<{ status: string; details: Record<string, unknown> }>(
+        "/api/ingestion/reset-all",
+        { method: "POST" },
+      );
+      setResetResult("All data wiped successfully.");
+      setResetConfirmOpen(false);
+      // Refresh UI to reflect empty state
+      await fetchStatus();
+      await fetchLogs();
+    } catch (err) {
+      setError("Reset failed. Is the backend running?");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -323,6 +348,61 @@ export default function DataSourcesPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      {/* Kill Switch — danger zone */}
+      <div className="mt-10 rounded-lg border-2 border-red-300 bg-red-50 p-5">
+        <div className="flex items-center gap-3 mb-2">
+          <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <h2 className="text-sm font-semibold text-red-700 uppercase tracking-wider">
+            Danger Zone
+          </h2>
+        </div>
+        <p className="text-sm text-red-600 mb-4">
+          Wipe <strong>all</strong> ingested data, cancel running tasks, flush
+          caches, and clear the knowledge graph. The app returns to a
+          clean-slate state. This cannot be undone.
+        </p>
+
+        {resetResult && (
+          <div className="mb-3 rounded-md bg-green-50 border border-green-200 px-4 py-2 text-sm text-green-700">
+            {resetResult}
+          </div>
+        )}
+
+        {!resetConfirmOpen ? (
+          <button
+            onClick={() => setResetConfirmOpen(true)}
+            className="rounded-md bg-red-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 active:bg-red-800"
+          >
+            Reset All Data
+          </button>
+        ) : (
+          <div className="rounded-md border border-red-300 bg-white p-4">
+            <p className="text-sm font-medium text-red-800 mb-3">
+              Are you sure? This will permanently delete every record in
+              PostgreSQL, Neo4j, and Redis.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleResetAll}
+                disabled={resetting}
+                className="rounded-md bg-red-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {resetting ? "Resetting..." : "Yes, wipe everything"}
+              </button>
+              <button
+                onClick={() => setResetConfirmOpen(false)}
+                disabled={resetting}
+                className="rounded-md bg-slate-200 px-5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
