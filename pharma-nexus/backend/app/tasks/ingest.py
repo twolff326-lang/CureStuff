@@ -218,6 +218,43 @@ def ingest_depmap(self, gene_effect_csv_path=None):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
+@celery_app.task(
+    name="app.tasks.ingest.ingest_prism",
+    bind=True,
+    max_retries=2,
+    acks_late=True,
+)
+def ingest_prism(self, data_dir=None):
+    """Ingest PRISM/GDSC drug sensitivity screen data.
+
+    Downloads and processes cell line drug viability data from:
+      - PRISM Repurposing (Broad Institute, Corsello et al. 2020)
+      - GDSC (Sanger Institute)
+
+    This is a placeholder task — the PRISM connector will be implemented
+    as part of the full pharmacological response integration. Until then
+    the task logs a descriptive status and returns cleanly.
+    """
+    logger.info("Starting PRISM/GDSC ingestion task")
+    try:
+        from app.services.ingestion.prism import PRISMConnector
+
+        kwargs = {}
+        if data_dir:
+            kwargs["data_dir"] = data_dir
+
+        result = run_async(_run_connector(PRISMConnector, **kwargs))
+        logger.info(
+            "PRISM/GDSC ingestion complete: %d records, %d errors",
+            result["records_processed"], result["errors_count"],
+        )
+        return result
+
+    except Exception as exc:
+        logger.error("PRISM/GDSC ingestion failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
 @celery_app.task(name="app.tasks.ingest.ingest_all_cancer_data")
 def ingest_all_cancer_data(census_tsv_path=None):
     """Run all cancer data ingestion: cBioPortal first, then TCGA + COSMIC in parallel.

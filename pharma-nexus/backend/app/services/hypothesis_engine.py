@@ -198,6 +198,7 @@ class HypothesisEngine:
                     "gnn_link": {"score": hyp.gnn_link_score or 0},
                     "mutation_context": {"score": hyp.mutation_context_score or 0},
                     "polypharmacology": {"score": hyp.polypharmacology_score or 0},
+                    "pharmacological_response": {"score": hyp.pharmacological_response_score or 0},
                 }
                 new_composite = self.config.compute_composite_score(
                     dimension_scores, weights
@@ -700,6 +701,7 @@ class HypothesisEngine:
             hypothesis.gnn_link_score = dimension_scores.get("gnn_link", {}).get("score", 0)
             hypothesis.mutation_context_score = dimension_scores.get("mutation_context", {}).get("score", 0)
             hypothesis.polypharmacology_score = dimension_scores.get("polypharmacology", {}).get("score", 0)
+            hypothesis.pharmacological_response_score = dimension_scores.get("pharmacological_response", {}).get("score", 0)
         else:
             # Create new
             hypothesis = Hypothesis(
@@ -719,6 +721,7 @@ class HypothesisEngine:
                 gnn_link_score=dimension_scores.get("gnn_link", {}).get("score", 0),
                 mutation_context_score=dimension_scores.get("mutation_context", {}).get("score", 0),
                 polypharmacology_score=dimension_scores.get("polypharmacology", {}).get("score", 0),
+                pharmacological_response_score=dimension_scores.get("pharmacological_response", {}).get("score", 0),
                 status="generated",
             )
             db.add(hypothesis)
@@ -818,6 +821,7 @@ class HypothesisEngine:
                 "safety": "safety profile",
                 "novelty": "novelty",
                 "causal_dependency": "causal dependency (DepMap)",
+                "pharmacological_response": "drug sensitivity screens (PRISM/GDSC)",
             }
             parts.append(
                 f"Strongest signal: {dim_labels.get(top[0], top[0])} "

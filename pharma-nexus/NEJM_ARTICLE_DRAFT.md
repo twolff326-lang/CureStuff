@@ -70,9 +70,9 @@ Drug–cancer candidate pairs are identified through six complementary strategie
 
 6. **Analog discovery via mechanism embeddings.** Drugs not yet associated with a cancer but whose mechanism-of-action embeddings (384-dimensional vectors stored with pgvector) are cosine-similar to drugs with established cancer associations.
 
-### Ten-Dimensional Evidence Scoring
+### Eleven-Dimensional Evidence Scoring
 
-Each drug–cancer pair is scored across 10 independent evidence dimensions (0–100 scale), described below with their statistical foundations:
+Each drug–cancer pair is scored across 11 independent evidence dimensions (0–100 scale), described below with their statistical foundations:
 
 **Dimension 1 — Pathway Overlap (weight: 0.14).** Computed from Fisher's exact test p-values for the contingency of shared pathway membership between drug targets and cancer-altered genes, with Benjamini-Hochberg FDR correction across pathways. A direct gene overlap bonus (+15) is added when a drug target is itself a cancer-altered gene. Bootstrap confidence intervals are computed from per-pathway significance scores.
 
@@ -92,7 +92,9 @@ Each drug–cancer pair is scored across 10 independent evidence dimensions (0�
 
 **Dimension 9 — Mutation Context (weight: 0.12).** Detects conditional vulnerabilities: cases where a drug target becomes essential because of a specific driver mutation. The algorithm checks whether essential drug targets (DepMap gene effect < −0.5) share pathways with or physically interact with (STRING score ≥ 700) driver mutations (frequency > 5%) in the cancer. This approximates conditional synthetic lethality without requiring combinatorial screening data. Score components: pathway co-occurrence (up to 40), PPI proximity (up to 25), selectivity (up to 20), driver frequency (up to 15).
 
-**Dimension 10 — Polypharmacology (weight: 0.08).** Identifies off-target bioassay activity against cancer-relevant proteins. The algorithm finds PubChem bioassay hits for a drug that are NOT among its official DrugBank targets, then checks whether these off-targets are overexpressed, mutated, or essential (DepMap) in the cancer. This captures findings such as disulfiram having bioassay activity against ferroptosis-related targets beyond its official target ALDH2. Score components: cancer-relevant off-target count (up to 35), bioassay potency (up to 30), essential off-targets (up to 20), expression alignment (up to 15).
+**Dimension 10 — Polypharmacology (weight: 0.07).** Identifies off-target bioassay activity against cancer-relevant proteins. The algorithm finds PubChem bioassay hits for a drug that are NOT among its official DrugBank targets, then checks whether these off-targets are overexpressed, mutated, or essential (DepMap) in the cancer. This captures findings such as disulfiram having bioassay activity against ferroptosis-related targets beyond its official target ALDH2. Score components: cancer-relevant off-target count (up to 35), bioassay potency (up to 30), essential off-targets (up to 20), expression alignment (up to 15).
+
+**Dimension 11 — Pharmacological Response (weight: 0.13).** Integrates direct drug sensitivity screen data from PRISM (Broad Institute; Corsello et al., *Nature Cancer* 2020) and GDSC (Sanger Institute). Unlike all other dimensions, which infer therapeutic compatibility from molecular features, this dimension measures actual drug-induced cell death in cancer cell lines. PRISM screens ~4,686 compounds across ~930 cell lines; GDSC provides IC50 dose-response curves for ~400 drugs across ~1,000 cell lines. Score components: screen hit rate across lineage-matched cell lines (up to 40), potency (best IC50/AUC, up to 30), lineage specificity (selectivity for target cancer vs. pan-cancer, up to 20), reproducibility across replicates (up to 10). This dimension activates upon PRISM/GDSC data ingestion and provides the only direct phenotypic validation within the scoring framework. Interaction synergies with expression correlation (1.3×), clinical evidence (1.4×), and causal dependency (1.2×) capture convergence between screen-based and mechanistic evidence.
 
 The composite score is a weighted sum: S_composite = Σ(w_i × S_i), with weights summing to 1.0 and configurable across four presets (balanced, novelty-focused, evidence-heavy, clinical-ready).
 
@@ -333,7 +335,7 @@ The Pharma-Nexus platform and the Tallula Algorithm introduce a new paradigm for
 
 **Figure 2. The Tallula Algorithm.** (A) Stochastic lens generation: Dirichlet-sampled weight vectors with dimension dropout. (B) Ensemble scoring: each hypothesis scored under K lenses producing a score distribution. (C) Distribution analysis: ubiquity (fraction above threshold), resonance (max/median), fragility (leave-one-out ablation). (D) Discovery classification: robust, resonant, moderate, fragile, weak. (E) Resonance decomposition: activation dimensions identified by comparing top-scoring vs. bottom-scoring lens profiles.
 
-**Figure 3. Ten-Dimensional Evidence Scoring.** Radar chart showing the 10 scoring dimensions for an example resonant discovery, with the deterministic composite score (low, masked by literature weighting) contrasted with the Tallula-identified maximum score (high, under mechanistic weighting).
+**Figure 3. Eleven-Dimensional Evidence Scoring.** Radar chart showing the 11 scoring dimensions for an example resonant discovery, with the deterministic composite score (low, masked by literature weighting) contrasted with the Tallula-identified maximum score (high, under mechanistic weighting). Dimension 11 (Pharmacological Response) provides direct phenotypic validation from PRISM/GDSC drug sensitivity screens.
 
 **Figure 4. Validation Framework Results.** (A) ROC curve with AUC. (B) Rank recovery: cumulative fraction of ground-truth positives recovered at each rank threshold. (C) Ablation study: bar chart of ROC-AUC drop when each dimension is removed. (D) Calibration plot: predicted vs. observed probability. (E) Temporal validation: rank percentiles of post-2010 approvals using pre-2010 evidence.
 

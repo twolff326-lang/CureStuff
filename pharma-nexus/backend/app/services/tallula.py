@@ -200,6 +200,12 @@ INTERACTION_PAIRS = [
     ("novelty", "causal_dependency", 1.3),
     # Literature + clinical = converging evidence streams
     ("literature_support", "clinical_evidence", 1.2),
+    # Pharmacological response + expression = screen sensitivity validates expression signal
+    ("pharmacological_response", "expression_correlation", 1.3),
+    # Pharmacological response + clinical = screen + trial evidence converge
+    ("pharmacological_response", "clinical_evidence", 1.4),
+    # Pharmacological response + causal dependency = screen + essential target
+    ("pharmacological_response", "causal_dependency", 1.2),
 ]
 
 
@@ -741,6 +747,7 @@ def _build_resonance_narrative(
         "safety": "safety profile",
         "novelty": "novelty",
         "causal_dependency": "causal dependency (DepMap)",
+        "pharmacological_response": "drug sensitivity from screens (PRISM/GDSC)",
     }
 
     # Top activating dimensions (positive activation)
@@ -1059,6 +1066,9 @@ class TallulaEngine:
                     "novelty": h.novelty_score or 0.0,
                     "causal_dependency": h.causal_dependency_score or 0.0,
                     "gnn_link": h.gnn_link_score or 0.0,
+                    "mutation_context": h.mutation_context_score or 0.0,
+                    "polypharmacology": h.polypharmacology_score or 0.0,
+                    "pharmacological_response": h.pharmacological_response_score or 0.0,
                 },
             })
 

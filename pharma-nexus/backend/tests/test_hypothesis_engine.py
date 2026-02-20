@@ -151,13 +151,13 @@ class TestRescoreAll:
         assert result["rescored"] == 1
         assert result["total"] == 1
 
-        # Verify the composite was recomputed with default weights (10 dims)
+        # Verify the composite was recomputed with default weights (11 dims)
         expected = (
-            60 * 0.14 + 40 * 0.14 + 80 * 0.12
-            + 20 * 0.10 + 50 * 0.07 + 70 * 0.10
+            60 * 0.12 + 40 * 0.12 + 80 * 0.10
+            + 20 * 0.09 + 50 * 0.06 + 70 * 0.09
         )
-        # 8.4 + 5.6 + 9.6 + 2.0 + 3.5 + 7.0 = 36.1
-        assert h.composite_score == 36.1
+        # 7.2 + 4.8 + 8.0 + 1.8 + 3.0 + 6.3 = 31.1
+        assert h.composite_score == 31.1
         assert h.evidence_strength == "suggestive"
 
     @pytest.mark.asyncio
@@ -207,6 +207,7 @@ class TestRescoreAll:
             gnn_link_score=None,
             mutation_context_score=None,
             polypharmacology_score=None,
+            pharmacological_response_score=None,
         )
 
         db = MockSession()
@@ -225,12 +226,14 @@ class TestRescoreAll:
                              literature_support_score=80, clinical_evidence_score=80,
                              safety_score=80, novelty_score=80,
                              causal_dependency_score=80, gnn_link_score=80,
-                             mutation_context_score=80, polypharmacology_score=80)
+                             mutation_context_score=80, polypharmacology_score=80,
+                             pharmacological_response_score=80)
         h2 = make_hypothesis(id=2, pathway_overlap_score=10, expression_correlation_score=10,
                              literature_support_score=10, clinical_evidence_score=10,
                              safety_score=10, novelty_score=10,
                              causal_dependency_score=10, gnn_link_score=10,
-                             mutation_context_score=10, polypharmacology_score=10)
+                             mutation_context_score=10, polypharmacology_score=10,
+                             pharmacological_response_score=10)
 
         db = MockSession()
         db.queue_result(MockResult(scalar_value=None))
@@ -299,6 +302,10 @@ class TestScoringConfigIntegration:
     def test_default_weights_clinical_and_novelty(self):
         """Clinical and novelty have same weight in defaults."""
         assert DEFAULT_WEIGHTS["clinical_evidence"] == DEFAULT_WEIGHTS["novelty"]
+
+    def test_default_weights_sum_to_one(self):
+        """Default weights must sum to exactly 1.0."""
+        assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 1e-9
 
 
 # ===================================================================

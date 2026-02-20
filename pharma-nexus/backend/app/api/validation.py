@@ -54,7 +54,7 @@ async def run_retrospective_validation(db: AsyncSession = Depends(get_db)):
 async def run_ablation_study(db: AsyncSession = Depends(get_db)):
     """Run leave-one-dimension-out ablation study.
 
-    For each of the 10 scoring dimensions, measures the impact on ROC-AUC
+    For each of the 11 scoring dimensions, measures the impact on ROC-AUC
     when that dimension is removed. Answers: "Which dimensions actually
     contribute to predictive performance?"
 

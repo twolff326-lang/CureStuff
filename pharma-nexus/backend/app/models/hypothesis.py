@@ -41,6 +41,7 @@ class Hypothesis(Base):
     gnn_link_score = Column(Float, comment="GNN-predicted link probability score (0-100)")
     mutation_context_score = Column(Float, default=0.0, comment="Mutation-conditional vulnerability score")
     polypharmacology_score = Column(Float, default=0.0, comment="Off-target bioassay activity score")
+    pharmacological_response_score = Column(Float, default=0.0, comment="PRISM/GDSC drug sensitivity screen score")
     p_value = Column(Float, comment="Permutation-based p-value against null distribution")
     fdr_adjusted_p_value = Column(Float, comment="BH FDR-corrected p-value")
     confidence_interval = Column(JSONB, comment="Bootstrap 95% CI for composite score")

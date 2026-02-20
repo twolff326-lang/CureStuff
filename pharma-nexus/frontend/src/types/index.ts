@@ -26,6 +26,7 @@ export interface DimensionScores {
   gnn_link: number;
   mutation_context: number;
   polypharmacology: number;
+  pharmacological_response: number;
 }
 
 export interface Hypothesis {
