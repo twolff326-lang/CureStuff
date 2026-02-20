@@ -446,9 +446,9 @@ class CBioPortalConnector(BaseConnector):
             session,
             CancerMolecularProfile,
             profile_records,
-            conflict_columns=["cancer_type_id", "gene_symbol"],
+            conflict_columns=["cancer_type_id", "gene_symbol", "alteration_type"],
             update_columns=[
-                "alteration_type", "median_expression", "expression_zscore", "source",
+                "median_expression", "expression_zscore", "source",
             ],
         )
         logger.info(
@@ -561,9 +561,9 @@ class CBioPortalConnector(BaseConnector):
             session,
             CancerMolecularProfile,
             cna_records,
-            conflict_columns=["cancer_type_id", "gene_symbol"],
+            conflict_columns=["cancer_type_id", "gene_symbol", "alteration_type"],
             update_columns=[
-                "alteration_type", "frequency_percent", "source",
+                "frequency_percent", "source",
             ],
         )
         logger.info(

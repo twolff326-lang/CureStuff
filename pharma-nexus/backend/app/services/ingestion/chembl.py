@@ -144,7 +144,7 @@ class ChEMBLConnector(BaseConnector):
 
                     # Resolve molecule to DrugBank ID
                     drugbank_id = await self._resolve_molecule_to_drugbank(
-                        client, molecule_chembl_id
+                        client, session, molecule_chembl_id
                     )
 
                     # Get or create target in our DB
@@ -186,8 +186,10 @@ class ChEMBLConnector(BaseConnector):
 
             # Batch commit
             if len(drug_target_records) >= self._batch_size:
-                await self.batch_insert_no_conflict(
-                    session, DrugTarget, drug_target_records
+                await self.batch_upsert_composite(
+                    session, DrugTarget, drug_target_records,
+                    conflict_columns=["drug_id", "target_id"],
+                    update_columns=["action_type", "known_action", "source", "references"],
                 )
                 await session.commit()
                 drug_target_records.clear()
@@ -200,8 +202,10 @@ class ChEMBLConnector(BaseConnector):
 
         # Final batch
         if drug_target_records:
-            await self.batch_insert_no_conflict(
-                session, DrugTarget, drug_target_records
+            await self.batch_upsert_composite(
+                session, DrugTarget, drug_target_records,
+                conflict_columns=["drug_id", "target_id"],
+                update_columns=["action_type", "known_action", "source", "references"],
             )
             await session.commit()
 
@@ -459,9 +463,17 @@ class ChEMBLConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     async def _resolve_molecule_to_drugbank(
-        self, client: httpx.AsyncClient, molecule_chembl_id: str
+        self,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        molecule_chembl_id: str,
     ) -> str | None:
-        """Look up cross-references for a ChEMBL molecule to find its DrugBank ID."""
+        """Look up cross-references for a ChEMBL molecule to find its DrugBank ID.
+
+        First tries the ChEMBL→DrugBank cross-reference. If that fails (e.g.
+        when using PubChem fallback IDs like PC12345), falls back to matching
+        the molecule's preferred name against drug names in our database.
+        """
         if molecule_chembl_id in self._molecule_drugbank_map:
             return self._molecule_drugbank_map[molecule_chembl_id] or None
 
@@ -473,12 +485,26 @@ class ChEMBLConnector(BaseConnector):
             self._molecule_drugbank_map[molecule_chembl_id] = ""
             return None
 
+        # Try 1: ChEMBL→DrugBank cross-reference
         cross_refs = data.get("cross_references", [])
         for xref in cross_refs:
             if xref.get("xref_src") == "drugbank":
                 db_id = xref.get("xref_id", "")
                 self._molecule_drugbank_map[molecule_chembl_id] = db_id
                 return db_id
+
+        # Try 2: Match molecule pref_name against drug names in our database
+        pref_name = data.get("pref_name", "")
+        if pref_name:
+            result = await session.execute(
+                select(Drug.drugbank_id).where(
+                    Drug.name.ilike(pref_name)
+                ).limit(1)
+            )
+            matched_id = result.scalar_one_or_none()
+            if matched_id:
+                self._molecule_drugbank_map[molecule_chembl_id] = matched_id
+                return matched_id
 
         self._molecule_drugbank_map[molecule_chembl_id] = ""
         return None

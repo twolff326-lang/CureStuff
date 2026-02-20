@@ -271,8 +271,8 @@ class COSMICConnector(BaseConnector):
             session,
             CancerMolecularProfile,
             profile_records,
-            conflict_columns=["cancer_type_id", "gene_symbol"],
-            update_columns=["alteration_type", "frequency_percent", "source"],
+            conflict_columns=["cancer_type_id", "gene_symbol", "alteration_type"],
+            update_columns=["frequency_percent", "source"],
         )
         logger.info("Created %d COSMIC driver gene profiles", count)
         return count

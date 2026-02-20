@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -57,6 +58,10 @@ class CancerMolecularProfile(Base):
     cancer_type = relationship("CancerType", back_populates="molecular_profiles")
 
     __table_args__ = (
+        UniqueConstraint(
+            "cancer_type_id", "gene_symbol", "alteration_type",
+            name="uq_cancer_molecular_profiles_cancer_gene_alt",
+        ),
         CheckConstraint(
             "frequency_percent IS NULL OR (frequency_percent >= 0 AND frequency_percent <= 100)",
             name="ck_cancer_molecular_profiles_frequency",

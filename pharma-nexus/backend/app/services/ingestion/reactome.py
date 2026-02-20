@@ -90,7 +90,7 @@ class ReactomeConnector(BaseConnector):
                     await session.rollback()
 
             # Phase 2: Bulk UniProt→Reactome mapping
-            pathway_genes = await self._fetch_uniprot_mapping(client)
+            pathway_genes = await self._fetch_uniprot_mapping(client, session)
             logger.info(
                 "UniProt2Reactome mapping: %d pathway-gene pairs",
                 sum(len(genes) for genes in pathway_genes.values()),
@@ -277,7 +277,7 @@ class ReactomeConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     async def _fetch_uniprot_mapping(
-        self, client: httpx.AsyncClient
+        self, client: httpx.AsyncClient, session: AsyncSession
     ) -> dict[str, list[dict[str, str]]]:
         """Download and parse UniProt2Reactome.txt bulk file.
 
@@ -315,13 +315,32 @@ class ReactomeConnector(BaseConnector):
 
             pathway_genes[reactome_id].append({
                 "uniprot_id": uniprot_id,
-                "gene_symbol": "",  # We'll resolve from our targets table
+                "gene_symbol": "",
             })
 
         # Resolve UniProt IDs to gene symbols using our target data
-        # Build a quick lookup
-        from app.models.target import Target
-        # (reusing session from caller via the connector pattern)
+        result = await session.execute(
+            select(Target.uniprot_id, Target.gene_symbol).where(
+                Target.uniprot_id.isnot(None)
+            )
+        )
+        uniprot_to_gene: dict[str, str] = {
+            uid: gsym for uid, gsym in result.all() if uid and gsym
+        }
+
+        resolved = 0
+        for genes_list in pathway_genes.values():
+            for entry in genes_list:
+                gene_sym = uniprot_to_gene.get(entry["uniprot_id"], "")
+                if gene_sym:
+                    entry["gene_symbol"] = gene_sym
+                    resolved += 1
+
+        logger.info(
+            "Resolved %d/%d UniProt→gene symbol mappings for Reactome pathways",
+            resolved,
+            sum(len(gl) for gl in pathway_genes.values()),
+        )
 
         return pathway_genes
 

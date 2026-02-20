@@ -276,6 +276,39 @@ class PubChemConnector(BaseConnector):
         activity_val_idx = col_idx.get("Activity Value [uM]")
         activity_name_idx = col_idx.get("Activity Name")
 
+        # Batch-resolve CIDs from active rows to drug names for linking.
+        # Collect unique CIDs that don't have a direct PC{CID} match.
+        active_cids_needing_lookup: set[str] = set()
+        for row in rows:
+            cells = row.get("Cell", [])
+            if not cells:
+                continue
+            cid = str(cells[cid_idx]) if cid_idx is not None and cid_idx < len(cells) else None
+            outcome = cells[activity_idx] if activity_idx is not None and activity_idx < len(cells) else None
+            if outcome and str(outcome).lower() != "active":
+                continue
+            if cid and f"PC{cid}" not in drug_map:
+                active_cids_needing_lookup.add(cid)
+
+        # Batch lookup: fetch compound titles for unresolved CIDs (max 100 at a time)
+        cid_to_drug_id: dict[str, int] = {}
+        cids_list = list(active_cids_needing_lookup)[:100]  # Cap to avoid huge requests
+        if cids_list:
+            try:
+                cids_param = ",".join(cids_list)
+                title_url = f"{PUBCHEM_BASE}/compound/cid/{cids_param}/property/Title/JSON"
+                title_resp = await self.http_get(client, title_url)
+                title_data = title_resp.json()
+                for prop in title_data.get("PropertyTable", {}).get("Properties", []):
+                    pcid = str(prop.get("CID", ""))
+                    title = prop.get("Title", "")
+                    if title:
+                        drug_id = drug_map.get(f"NAME:{title.lower()}")
+                        if drug_id:
+                            cid_to_drug_id[pcid] = drug_id
+            except Exception:
+                pass  # Name-based linking is best-effort
+
         records = []
         for row in rows:
             cells = row.get("Cell", [])
@@ -310,8 +343,10 @@ class PubChemConnector(BaseConnector):
                     else None
                 )
 
-                # Try to link CID to existing drug
-                drug_id = drug_map.get(f"PC{cid}") if cid else None
+                # Try to link CID to existing drug (direct match, then name-based)
+                drug_id = None
+                if cid:
+                    drug_id = drug_map.get(f"PC{cid}") or cid_to_drug_id.get(cid)
 
                 records.append({
                     "pubchem_aid": str(aid),
@@ -394,8 +429,18 @@ class PubChemConnector(BaseConnector):
     async def _build_drug_lookup(
         self, session: AsyncSession
     ) -> dict[str, int]:
-        """Build a mapping of drugbank_id -> drug.id for CID linking."""
+        """Build a mapping for CID linking.
+
+        Maps both drugbank_id (e.g. 'PC12345') and lowercase drug name
+        to drug.id so bioassay CIDs can be resolved via PubChem name
+        lookup when the direct PC{CID} match fails.
+        """
         result = await session.execute(
-            select(Drug.drugbank_id, Drug.id)
+            select(Drug.drugbank_id, Drug.name, Drug.id)
         )
-        return {row[0]: row[1] for row in result.all()}
+        lookup: dict[str, int] = {}
+        for drugbank_id, name, drug_id in result.all():
+            lookup[drugbank_id] = drug_id
+            if name:
+                lookup[f"NAME:{name.lower()}"] = drug_id
+        return lookup

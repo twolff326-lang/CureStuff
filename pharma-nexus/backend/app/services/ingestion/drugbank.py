@@ -345,8 +345,10 @@ class DrugBankConnector(BaseConnector):
                     )
 
             if drug_target_rows:
-                await self.batch_insert_no_conflict(
+                await self.batch_upsert_composite(
                     session, DrugTarget, drug_target_rows,
+                    conflict_columns=["drug_id", "target_id"],
+                    update_columns=["action_type", "known_action", "source"],
                 )
 
         await session.commit()
@@ -359,8 +361,10 @@ class DrugBankConnector(BaseConnector):
         self, session: AsyncSession
     ) -> list[dict[str, Any]]:
         """Fetch a set of common FDA-approved drugs from PubChem as fallback."""
-        # Well-known FDA-approved drugs relevant to cancer repurposing research
+        # FDA-approved drugs with documented cancer repurposing research interest.
+        # Grouped by therapeutic origin to ensure broad coverage.
         FALLBACK_DRUGS = [
+            # --- Original repurposing candidates (well-studied) ---
             "Metformin", "Aspirin", "Ibuprofen", "Celecoxib",
             "Thalidomide", "Doxycycline", "Chloroquine",
             "Hydroxychloroquine", "Methotrexate", "Tamoxifen",
@@ -371,6 +375,60 @@ class DrugBankConnector(BaseConnector):
             "Everolimus", "Valproic Acid", "Vorinostat", "Pioglitazone",
             "Rosiglitazone", "Cimetidine", "Digoxin", "Nelfinavir",
             "Ritonavir", "Auranofin", "Itraconazole", "Ketoconazole",
+            # --- Targeted kinase inhibitors (approved for cancer) ---
+            "Imatinib", "Sorafenib", "Sunitinib", "Erlotinib",
+            "Gefitinib", "Lapatinib", "Dasatinib", "Nilotinib",
+            "Crizotinib", "Vemurafenib", "Dabrafenib", "Trametinib",
+            "Ibrutinib", "Ruxolitinib", "Palbociclib", "Ribociclib",
+            "Abemaciclib", "Osimertinib", "Alectinib", "Lorlatinib",
+            "Lenvatinib", "Cabozantinib", "Regorafenib", "Axitinib",
+            "Pazopanib", "Ponatinib", "Bosutinib", "Vandetanib",
+            # --- Immunotherapy / immune modulators ---
+            "Lenalidomide", "Pomalidomide",
+            # --- Hormonal agents ---
+            "Letrozole", "Anastrozole", "Exemestane", "Enzalutamide",
+            "Abiraterone", "Bicalutamide", "Flutamide",
+            # --- Classic chemotherapy (repurposing at low doses) ---
+            "Cyclophosphamide", "Doxorubicin", "Cisplatin", "Carboplatin",
+            "Paclitaxel", "Docetaxel", "Gemcitabine", "Fluorouracil",
+            "Capecitabine", "Temozolomide", "Etoposide", "Irinotecan",
+            "Vincristine", "Vinblastine", "Oxaliplatin", "Bleomycin",
+            # --- Epigenetic / HDAC inhibitors ---
+            "Romidepsin", "Panobinostat", "Belinostat", "Decitabine",
+            "Azacitidine",
+            # --- Proteasome inhibitors ---
+            "Bortezomib", "Carfilzomib", "Ixazomib",
+            # --- Cardiovascular repurposing candidates ---
+            "Verapamil", "Nifedipine", "Amlodipine", "Lisinopril",
+            "Enalapril", "Metoprolol", "Atenolol", "Spironolactone",
+            "Dipyridamole", "Ticlopidine", "Clopidogrel", "Warfarin",
+            "Pravastatin", "Rosuvastatin", "Fluvastatin",
+            # --- Antidiabetic repurposing candidates ---
+            "Glipizide", "Glyburide", "Empagliflozin", "Canagliflozin",
+            "Liraglutide", "Acarbose",
+            # --- Anti-inflammatory / immune ---
+            "Dexamethasone", "Prednisone", "Indomethacin", "Naproxen",
+            "Sulfasalazine", "Leflunomide", "Mycophenolate",
+            "Cyclosporine", "Tacrolimus", "Colchicine",
+            # --- Antiparasitic / antimicrobial repurposing ---
+            "Albendazole", "Flubendazole", "Pyrvinium", "Nitazoxanide",
+            "Atovaquone", "Dapsone", "Clofazimine",
+            "Chlorpromazine", "Thioridazine",
+            # --- Metabolic / other repurposing ---
+            "Rapamycin", "Methoxyestradiol", "Diclofenac", "Piroxicam",
+            "Zileuton", "Montelukast", "Zoledronic Acid", "Alendronate",
+            "Tretinoin", "Isotretinoin", "Bexarotene",
+            # --- PARP inhibitors ---
+            "Olaparib", "Niraparib", "Rucaparib", "Talazoparib",
+            # --- mTOR / PI3K pathway ---
+            "Temsirolimus", "Alpelisib", "Copanlisib",
+            # --- BCL-2 / apoptosis ---
+            "Venetoclax",
+            # --- Antihistamines with repurposing data ---
+            "Loratadine", "Desloratadine", "Terfenadine", "Clemastine",
+            # --- Psychiatric / CNS with repurposing data ---
+            "Lithium", "Sertraline", "Fluoxetine", "Imipramine",
+            "Clomipramine",
         ]
 
         client = await self._get_client()
@@ -396,7 +454,10 @@ class DrugBankConnector(BaseConnector):
                     session, Drug, drug_records,
                     conflict_column="drugbank_id",
                     update_columns=[
-                        "molecular_formula", "smiles", "inchi_key",
+                        "name", "generic_name", "description",
+                        "mechanism_of_action", "pharmacodynamics", "indication",
+                        "status", "molecular_formula", "smiles", "inchi_key",
+                        "cas_number", "categories",
                     ],
                 )
                 await session.commit()

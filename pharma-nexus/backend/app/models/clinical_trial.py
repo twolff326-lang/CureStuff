@@ -3,6 +3,7 @@ from datetime import date
 from sqlalchemy import (
     Column,
     Date,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -22,6 +23,9 @@ class ClinicalTrial(Base):
     title = Column(Text, nullable=False)
     status = Column(String(50), index=True)
     phase = Column(String(20))
+    cancer_type_id = Column(
+        Integer, ForeignKey("cancer_types.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     conditions = Column(JSONB, default=list)
     interventions = Column(JSONB, default=list)
     enrollment = Column(Integer)
@@ -31,6 +35,7 @@ class ClinicalTrial(Base):
     source_url = Column(Text)
 
     # Relationships
+    cancer_type = relationship("CancerType")
     trial_drugs = relationship(
         "TrialDrug", back_populates="trial", lazy="selectin"
     )
