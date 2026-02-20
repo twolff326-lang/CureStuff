@@ -564,6 +564,7 @@ _ALL_TABLES = [
     "drugs",
     "scoring_weights",
     "ingestion_logs",
+    "pipeline_runs",
 ]
 
 
