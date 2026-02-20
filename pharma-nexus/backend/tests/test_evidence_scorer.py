@@ -96,8 +96,7 @@ class TestScorePathwayOverlap:
         assert "details" in result
         assert "evidence" in result
         assert result["details"]["shared_pathway_count"] == 2
-        assert result["details"]["significance_bonus"] == 10  # 1 pathway >= 0.7
-        assert result["details"]["direct_overlap_bonus"] == 20  # PIK3CA in both
+        assert result["details"]["direct_overlap_bonus"] == 15  # PIK3CA in both
 
     @pytest.mark.asyncio
     async def test_no_overlap(self, pathway_data_empty):
@@ -115,9 +114,9 @@ class TestScorePathwayOverlap:
         db = MockSession()
         result = await scorer.score_pathway_overlap(1, 1, db, pathway_data=pathway_data_high_overlap)
 
+        # overlap_score=60 from fixture + direct_overlap=15 = 75
         assert result["score"] > 50
-        assert result["details"]["significance_bonus"] == 30  # 3 pathways >= 0.7 -> capped 30
-        assert result["details"]["direct_overlap_bonus"] == 20  # CDK4 in both
+        assert result["details"]["direct_overlap_bonus"] == 15  # CDK4 in both
 
     @pytest.mark.asyncio
     async def test_score_capped_at_100(self):
@@ -216,8 +215,8 @@ class TestScoreExpressionCorrelation:
 
     @pytest.mark.asyncio
     async def test_inhibitor_overexpression_high_compatibility(self):
-        """Inhibitor + high overexpression z-score = high compatibility."""
-        dt = type("DT", (), {"action_type": "inhibitor"})()
+        """Inhibitor + high overexpression z-score + potent binding = high compatibility."""
+        dt = type("DT", (), {"action_type": "inhibitor", "binding_affinity_nm": 1.0})()
         target = type("T", (), {"id": 1, "gene_symbol": "EGFR"})()
         profile = type("CMP", (), {
             "expression_zscore": 3.0,
@@ -230,13 +229,14 @@ class TestScoreExpressionCorrelation:
         db.queue_result(MockResult(scalar_value=profile))  # profile
 
         result = await scorer.score_expression_correlation(1, 1, db)
-        # compat = min(3.0 / 3.0, 1.0) = 1.0 -> score = 100
-        assert result["score"] == 100
+        # action_match=1.0, expr_mag=min(3/4,1)=0.75, binding=1.0(1nM)
+        # compat = 1.0 * 0.75 * 1.0 = 0.75 -> score = 75
+        assert result["score"] == 75
 
     @pytest.mark.asyncio
     async def test_agonist_underexpression_compatibility(self):
-        """Agonist + underexpression = good compatibility."""
-        dt = type("DT", (), {"action_type": "agonist"})()
+        """Agonist + underexpression + potent binding = good compatibility."""
+        dt = type("DT", (), {"action_type": "agonist", "binding_affinity_nm": 1.0})()
         target = type("T", (), {"id": 1, "gene_symbol": "TP53"})()
         profile = type("CMP", (), {
             "expression_zscore": -2.5,
@@ -249,13 +249,14 @@ class TestScoreExpressionCorrelation:
         db.queue_result(MockResult(scalar_value=profile))  # profile
 
         result = await scorer.score_expression_correlation(1, 1, db)
-        # compat = min(2.5 / 3.0, 1.0) ≈ 0.833 -> score ≈ 83
-        assert result["score"] == 83
+        # action_match=1.0, expr_mag=min(2.5/4,1)=0.625, binding=1.0(1nM)
+        # compat = 1.0 * 0.625 * 1.0 = 0.625 -> score = round(62.5) = 62
+        assert result["score"] == 62
 
     @pytest.mark.asyncio
     async def test_mismatched_action_lower_score(self):
         """Non-specific action type gets lower compatibility."""
-        dt = type("DT", (), {"action_type": "modulator"})()
+        dt = type("DT", (), {"action_type": "modulator", "binding_affinity_nm": 100.0})()
         target = type("T", (), {"id": 1, "gene_symbol": "BRAF"})()
         profile = type("CMP", (), {
             "expression_zscore": 2.0,
@@ -268,13 +269,15 @@ class TestScoreExpressionCorrelation:
         db.queue_result(MockResult(scalar_value=profile))
 
         result = await scorer.score_expression_correlation(1, 1, db)
-        # compat = min(2.0 / 5.0, 0.5) = 0.4 -> score = 40
-        assert result["score"] == 40
+        # "modulator" -> unknown -> action_match=0.3
+        # expr_mag=min(2/4,1)=0.5, pKi=9-log10(100)=7, binding=(7-5)/4=0.5
+        # compat = 0.3 * 0.5 * 0.5 = 0.075 -> score = 8
+        assert result["score"] == 8
 
     @pytest.mark.asyncio
     async def test_zero_zscore(self):
-        """Zero z-score gives minimal compatibility."""
-        dt = type("DT", (), {"action_type": "inhibitor"})()
+        """Zero z-score gives zero compatibility (expr_magnitude=0)."""
+        dt = type("DT", (), {"action_type": "inhibitor", "binding_affinity_nm": 1.0})()
         target = type("T", (), {"id": 1, "gene_symbol": "ALK"})()
         profile = type("CMP", (), {
             "expression_zscore": 0,
@@ -287,8 +290,9 @@ class TestScoreExpressionCorrelation:
         db.queue_result(MockResult(scalar_value=profile))
 
         result = await scorer.score_expression_correlation(1, 1, db)
-        # compat = 0.1 -> score = 10
-        assert result["score"] == 10
+        # zscore=0 -> action_match=0.2, expr_mag=0, binding=1.0
+        # compat = 0.2 * 0 * 1.0 = 0 -> score = 0
+        assert result["score"] == 0
 
     @pytest.mark.asyncio
     async def test_cached_score_zero(self):
@@ -318,43 +322,51 @@ class TestScoreLiteratureSupport:
 
     @pytest.mark.asyncio
     async def test_one_co_mention(self):
-        """One co-mention paper = score 8."""
+        """One co-mention paper produces quality-weighted score."""
         paper = make_literature()
         db = MockSession()
         db.queue_result(MockResult(rows=[paper]))  # 1 co-mention
         db.queue_result(MockResult(scalar_value=0))  # 0 analyzed
 
         result = await scorer.score_literature_support(1, 1, db)
-        assert result["score"] == 8
+        # Default mock: study_weight=3.0 (default), findings=1.0, recency=0.6 (no date), specificity=1.0
+        # quality = 3.0 * 1.0 * 0.6 * 1.0 = 1.8 -> round = 2
+        assert result["score"] == 2
         assert result["details"]["co_mention_papers"] == 1
 
     @pytest.mark.asyncio
     async def test_multiple_papers_with_analyzed(self):
-        """3 co-mentions + 2 analyzed = 3*8 + 2*3 = 30."""
+        """3 co-mentions + 2 analyzed with quality-weighted scoring."""
         papers = [make_literature(id=i, pmid=f"PMD{i}") for i in range(3)]
         db = MockSession()
         db.queue_result(MockResult(rows=papers))
         db.queue_result(MockResult(scalar_value=2))
 
         result = await scorer.score_literature_support(1, 1, db)
-        assert result["score"] == 30
+        # 3 papers * 1.8 quality each = 5.4 -> round = 5
+        # analyzed_bonus = min(2*2, 10) = 4
+        # score = 5 + 4 = 9
+        assert result["score"] == 9
 
     @pytest.mark.asyncio
     async def test_repurposing_bonus(self):
-        """Papers with 'repurposing' tag get +5 bonus each."""
+        """Papers with 'repurposing' tag get 2x specificity multiplier."""
         paper = make_literature(relevance_tags=["drug repurposing", "breast cancer"])
         db = MockSession()
         db.queue_result(MockResult(rows=[paper]))
         db.queue_result(MockResult(scalar_value=0))
 
         result = await scorer.score_literature_support(1, 1, db)
-        # 1*8 + 0*3 + 5 (repurposing) = 13
-        assert result["score"] == 13
-        assert result["details"]["repurposing_bonus"] == 5
+        # quality = 3.0 * 1.0 * 0.6 * 2.0 (repurposing) = 3.6 -> round = 4
+        assert result["score"] == 4
+        # Verify repurposing was detected in paper breakdown
+        breakdown = result["details"]["paper_quality_breakdown"]
+        assert len(breakdown) == 1
+        assert breakdown[0]["is_repurposing"] is True
 
     @pytest.mark.asyncio
-    async def test_repurposing_bonus_capped_at_20(self):
-        """Repurposing bonus caps at 20."""
+    async def test_repurposing_multiplier_boosts_quality(self):
+        """Repurposing papers get 2x specificity multiplier on quality weight."""
         papers = [
             make_literature(id=i, pmid=f"PMD{i}", relevance_tags=["repurposing candidate"])
             for i in range(10)
@@ -364,18 +376,23 @@ class TestScoreLiteratureSupport:
         db.queue_result(MockResult(scalar_value=0))
 
         result = await scorer.score_literature_support(1, 1, db)
-        assert result["details"]["repurposing_bonus"] == 20
+        # 10 papers * 3.6 quality each (2x specificity) = 36
+        assert result["score"] == 36
+        # All papers should be flagged as repurposing
+        for detail in result["details"]["paper_quality_breakdown"]:
+            assert detail["is_repurposing"] is True
 
     @pytest.mark.asyncio
     async def test_score_capped_at_100(self):
         """Score caps at 100 even with many papers."""
-        papers = [make_literature(id=i, pmid=f"PMD{i}") for i in range(20)]
+        papers = [make_literature(id=i, pmid=f"PMD{i}") for i in range(60)]
         db = MockSession()
         db.queue_result(MockResult(rows=papers))
         db.queue_result(MockResult(scalar_value=10))
 
         result = await scorer.score_literature_support(1, 1, db)
-        # 20*8 + 10*3 = 190 -> capped at 100
+        # 60 * 1.8 quality = 108 -> capped at 100
+        # analyzed_bonus = min(10*2, 10) = 10, but already capped
         assert result["score"] == 100
 
     @pytest.mark.asyncio
@@ -669,7 +686,7 @@ class TestScoreNovelty:
 
     @pytest.mark.asyncio
     async def test_few_papers_reduces_novelty(self):
-        """2 co-mention papers = 100 - 2*8 = 84."""
+        """2 co-mention papers with exponential decay."""
         db = MockSession()
         db.queue_result(MockResult(scalar_value=2))
         db.queue_result(MockResult(scalar_value="Lung Cancer"))
@@ -677,11 +694,12 @@ class TestScoreNovelty:
         db.queue_result(MockResult(scalar_value=None))
 
         result = await scorer.score_novelty(1, 1, db)
-        assert result["score"] == 84
+        # 100 * exp(-0.5 * 2) * exp(-1.0 * 0) = 100 * 0.3679 = 37
+        assert result["score"] == 37
 
     @pytest.mark.asyncio
     async def test_trials_reduce_novelty(self):
-        """1 relevant trial reduces by 15."""
+        """1 relevant trial with exponential decay."""
         trial = make_clinical_trial(conditions=["Breast Cancer"])
         db = MockSession()
         db.queue_result(MockResult(scalar_value=0))  # no papers
@@ -690,7 +708,8 @@ class TestScoreNovelty:
         db.queue_result(MockResult(scalar_value=None))
 
         result = await scorer.score_novelty(1, 1, db)
-        assert result["score"] == 85  # 100 - 15
+        # 100 * exp(-0.5 * 0) * exp(-1.0 * 1) = 100 * 0.3679 = 37
+        assert result["score"] == 37
 
     @pytest.mark.asyncio
     async def test_already_indicated(self):
@@ -745,9 +764,9 @@ class TestScoreNovelty:
 
 class TestScoreAllDimensions:
     @pytest.mark.asyncio
-    async def test_returns_all_six_dimensions(self):
-        """score_all_dimensions returns all 6 dimension keys."""
-        # We need a lot of mock results for all 6 scorers
+    async def test_returns_all_ten_dimensions(self):
+        """score_all_dimensions returns all 10 dimension keys."""
+        # We need mock results for all 10 scorers
         db = MockSession()
 
         # Pathway (uses pathway_data param, no DB calls)
@@ -771,6 +790,19 @@ class TestScoreAllDimensions:
         db.queue_result(MockResult(rows=[]))  # trials
         db.queue_result(MockResult(scalar_value=None))  # indication
 
+        # Causal dependency: cancer not found
+        db.queue_result(MockResult(rows=[]))  # cancer row
+
+        # GNN link: no training run
+        db.queue_result(MockResult(scalar_value=None))  # latest run
+
+        # Mutation context: cancer not found
+        db.queue_result(MockResult(rows=[]))  # cancer row
+
+        # Polypharmacology: no official targets
+        db.queue_result(MockResult(rows=[]))  # official targets
+        db.queue_result(MockResult(rows=[]))  # bioassay hits
+
         pathway_data = {
             "shared_pathways": [],
             "shared_count": 0,
@@ -789,6 +821,10 @@ class TestScoreAllDimensions:
             "clinical_evidence",
             "safety",
             "novelty",
+            "causal_dependency",
+            "gnn_link",
+            "mutation_context",
+            "polypharmacology",
         }
         assert set(result.keys()) == expected_keys
 
@@ -796,4 +832,3 @@ class TestScoreAllDimensions:
         for dim in expected_keys:
             assert "score" in result[dim]
             assert "details" in result[dim]
-            assert "evidence" in result[dim]

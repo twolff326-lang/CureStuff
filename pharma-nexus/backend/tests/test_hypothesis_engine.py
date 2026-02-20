@@ -135,6 +135,10 @@ class TestRescoreAll:
             clinical_evidence_score=20,
             safety_score=50,
             novelty_score=70,
+            causal_dependency_score=0,
+            gnn_link_score=0,
+            mutation_context_score=0,
+            polypharmacology_score=0,
         )
 
         db = MockSession()
@@ -147,14 +151,14 @@ class TestRescoreAll:
         assert result["rescored"] == 1
         assert result["total"] == 1
 
-        # Verify the composite was recomputed with default weights
+        # Verify the composite was recomputed with default weights (10 dims)
         expected = (
-            60 * 0.20 + 40 * 0.20 + 80 * 0.20
-            + 20 * 0.15 + 50 * 0.10 + 70 * 0.15
+            60 * 0.14 + 40 * 0.14 + 80 * 0.12
+            + 20 * 0.10 + 50 * 0.07 + 70 * 0.10
         )
-        # 12 + 8 + 16 + 3 + 5 + 10.5 = 54.5
-        assert h.composite_score == 54.5
-        assert h.evidence_strength == "moderate"
+        # 8.4 + 5.6 + 9.6 + 2.0 + 3.5 + 7.0 = 36.1
+        assert h.composite_score == 36.1
+        assert h.evidence_strength == "suggestive"
 
     @pytest.mark.asyncio
     async def test_rescore_with_custom_weights(self):
@@ -199,6 +203,10 @@ class TestRescoreAll:
             clinical_evidence_score=None,
             safety_score=None,
             novelty_score=None,
+            causal_dependency_score=None,
+            gnn_link_score=None,
+            mutation_context_score=None,
+            polypharmacology_score=None,
         )
 
         db = MockSession()
@@ -215,10 +223,14 @@ class TestRescoreAll:
         """Rescoring handles multiple hypotheses."""
         h1 = make_hypothesis(id=1, pathway_overlap_score=80, expression_correlation_score=80,
                              literature_support_score=80, clinical_evidence_score=80,
-                             safety_score=80, novelty_score=80)
+                             safety_score=80, novelty_score=80,
+                             causal_dependency_score=80, gnn_link_score=80,
+                             mutation_context_score=80, polypharmacology_score=80)
         h2 = make_hypothesis(id=2, pathway_overlap_score=10, expression_correlation_score=10,
                              literature_support_score=10, clinical_evidence_score=10,
-                             safety_score=10, novelty_score=10)
+                             safety_score=10, novelty_score=10,
+                             causal_dependency_score=10, gnn_link_score=10,
+                             mutation_context_score=10, polypharmacology_score=10)
 
         db = MockSession()
         db.queue_result(MockResult(scalar_value=None))
@@ -281,9 +293,8 @@ class TestScoringConfigIntegration:
         assert composite == 25.0
 
     def test_default_weights_symmetry(self):
-        """Default weights treat pathway, expression, literature equally."""
+        """Default weights treat pathway and expression equally."""
         assert DEFAULT_WEIGHTS["pathway_overlap"] == DEFAULT_WEIGHTS["expression_correlation"]
-        assert DEFAULT_WEIGHTS["expression_correlation"] == DEFAULT_WEIGHTS["literature_support"]
 
     def test_default_weights_clinical_and_novelty(self):
         """Clinical and novelty have same weight in defaults."""

@@ -1651,7 +1651,7 @@ class EvidenceScorer:
                     f"Off-target activity: drug shows bioassay activity against "
                     f"{hit['gene_symbol']} (not an official target). "
                     f"Cancer relevance: {', '.join(hit['relevance'])}."
-                    f"{f' Potency: {hit[\"best_value\"]:.0f}nM' if hit.get('best_value') else ''}"
+                    + (f" Potency: {hit['best_value']:.0f}nM" if hit.get("best_value") else "")
                 ),
                 "strength": "strong" if hit["is_essential"] else "moderate",
                 "confidence": 0.7 if hit["is_essential"] else 0.5,
