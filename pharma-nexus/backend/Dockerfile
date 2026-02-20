@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
+# Install torch first — torch-scatter and torch-sparse need it at build time
+RUN pip install --no-cache-dir --prefix=/install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.0
+
+# Make the just-installed torch visible for building torch-scatter/torch-sparse
+ENV PYTHONPATH=/install/lib/python3.11/site-packages
+
 RUN pip install --no-cache-dir --prefix=/install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # ---- Runtime stage ----
