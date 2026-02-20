@@ -1,11 +1,15 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.ingestion_log import IngestionLog
 from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -357,4 +361,152 @@ async def get_ingestion_logs(
         "total": total,
         "page": page,
         "per_page": per_page,
+    }
+
+
+# ------------------------------------------------------------------
+# Table deletion
+# ------------------------------------------------------------------
+
+# Map of deletable table names to their SQLAlchemy models.
+# Junction/child tables are listed before parent tables so that
+# CASCADE deletes work correctly even without ON DELETE CASCADE.
+_DELETABLE_TABLES: dict[str, list[str]] = {
+    # Ingestion data tables
+    "drugs": ["literature_drugs", "trial_drugs", "drug_targets", "bioassays", "drugs"],
+    "targets": ["literature_targets", "pathway_targets", "drug_targets", "protein_interactions", "targets"],
+    "drug_targets": ["drug_targets"],
+    "cancer_types": ["literature_cancers", "mutations", "molecular_profiles", "cancer_types"],
+    "molecular_profiles": ["molecular_profiles"],
+    "mutations": ["mutations"],
+    "pathways": ["pathway_targets", "pathways"],
+    "pathway_targets": ["pathway_targets"],
+    "protein_interactions": ["protein_interactions"],
+    "literature": ["literature_drugs", "literature_targets", "literature_cancers", "literature"],
+    "clinical_trials": ["trial_drugs", "clinical_trials"],
+    "bioassays": ["bioassays"],
+    "gene_dependencies": ["gene_dependencies"],
+    "combination_hypotheses": ["combination_hypotheses"],
+    "ingestion_logs": ["ingestion_logs"],
+}
+
+# Map of table name used in the API → SQLAlchemy model.
+# Lazy-loaded to avoid circular imports at module level.
+def _get_table_model(table_name: str):
+    """Return the SQLAlchemy model class for a table name."""
+    from app.models.drug import Drug, DrugTarget, LiteratureDrug, TrialDrug
+    from app.models.target import Target, ProteinInteraction
+    from app.models.cancer_type import CancerType, CancerMolecularProfile
+    from app.models.mutation import Mutation
+    from app.models.pathway import Pathway, PathwayTarget
+    from app.models.literature import Literature, LiteratureTarget, LiteratureCancer
+    from app.models.clinical_trial import ClinicalTrial
+    from app.models.evidence import Bioassay
+    from app.models.gene_dependency import GeneDependency, CombinationHypothesis
+
+    mapping = {
+        "drugs": Drug,
+        "targets": Target,
+        "drug_targets": DrugTarget,
+        "cancer_types": CancerType,
+        "molecular_profiles": CancerMolecularProfile,
+        "mutations": Mutation,
+        "pathways": Pathway,
+        "pathway_targets": PathwayTarget,
+        "protein_interactions": ProteinInteraction,
+        "literature": Literature,
+        "literature_drugs": LiteratureDrug,
+        "literature_targets": LiteratureTarget,
+        "literature_cancers": LiteratureCancer,
+        "clinical_trials": ClinicalTrial,
+        "trial_drugs": TrialDrug,
+        "bioassays": Bioassay,
+        "gene_dependencies": GeneDependency,
+        "combination_hypotheses": CombinationHypothesis,
+        "ingestion_logs": IngestionLog,
+    }
+    return mapping.get(table_name)
+
+
+@router.delete("/table/{table_name}")
+async def delete_table_data(
+    table_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all rows from a specific data table.
+
+    Also removes dependent junction rows (e.g. deleting 'drugs' also
+    clears drug_targets, literature_drugs, trial_drugs, and bioassays).
+
+    Valid table names: drugs, targets, drug_targets, cancer_types,
+    molecular_profiles, mutations, pathways, pathway_targets,
+    protein_interactions, literature, clinical_trials, bioassays,
+    gene_dependencies, combination_hypotheses, ingestion_logs
+    """
+    if table_name not in _DELETABLE_TABLES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid table '{table_name}'. "
+                f"Must be one of: {', '.join(sorted(_DELETABLE_TABLES))}"
+            ),
+        )
+
+    tables_to_clear = _DELETABLE_TABLES[table_name]
+    deleted_counts: dict[str, int] = {}
+
+    for tbl in tables_to_clear:
+        model = _get_table_model(tbl)
+        if model is None:
+            continue
+        result = await db.execute(delete(model))
+        deleted_counts[tbl] = result.rowcount
+
+    await db.commit()
+
+    total_deleted = sum(deleted_counts.values())
+    logger.info(
+        "Deleted table data for '%s': %s (total: %d rows)",
+        table_name, deleted_counts, total_deleted,
+    )
+
+    return {
+        "table": table_name,
+        "deleted": deleted_counts,
+        "total_deleted": total_deleted,
+    }
+
+
+# ------------------------------------------------------------------
+# Task cancellation
+# ------------------------------------------------------------------
+
+@router.post("/cancel/{task_id}")
+async def cancel_task(task_id: str):
+    """Cancel a running or queued ingestion task.
+
+    Sends a revoke signal to the Celery worker. If the task is already
+    running, ``terminate=True`` sends SIGTERM to the worker process
+    handling it.  Queued tasks are simply removed from the queue.
+
+    Returns the task state after the revoke signal is sent.
+    """
+    result = celery_app.AsyncResult(task_id)
+    task_state = result.state
+
+    if task_state in ("SUCCESS", "FAILURE"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task {task_id} has already finished (state: {task_state})",
+        )
+
+    # Revoke with terminate=True so running tasks get a SIGTERM
+    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+
+    logger.info("Revoked task %s (previous state: %s)", task_id, task_state)
+
+    return {
+        "task_id": task_id,
+        "previous_state": task_state,
+        "action": "revoked",
     }
