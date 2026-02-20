@@ -817,7 +817,7 @@ class ValidationFramework:
     ) -> dict[str, Any]:
         """Leave-one-dimension-out ablation study.
 
-        For each of the 10 scoring dimensions, re-compute composite scores
+        For each of the 11 scoring dimensions, re-compute composite scores
         with that dimension zeroed out and measure the impact on ROC-AUC.
 
         Answers: "Which dimensions actually matter for prediction?"
@@ -1029,6 +1029,7 @@ class ValidationFramework:
                 Hypothesis.gnn_link_score,
                 Hypothesis.mutation_context_score,
                 Hypothesis.polypharmacology_score,
+                Hypothesis.pharmacological_response_score,
             )
         )
         hypotheses = result.all()
@@ -1519,6 +1520,7 @@ class ValidationFramework:
             "gnn_link": "gnn_link_score",
             "mutation_context": "mutation_context_score",
             "polypharmacology": "polypharmacology_score",
+            "pharmacological_response": "pharmacological_response_score",
         }
 
         single_dim_results = {}
@@ -1734,6 +1736,7 @@ def getattr_from_row(row, dim: str) -> float:
         "gnn_link": 9,
         "mutation_context": 10,
         "polypharmacology": 11,
+        "pharmacological_response": 12,
     }
     idx = dim_index.get(dim)
     if idx is None:

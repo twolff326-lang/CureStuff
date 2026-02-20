@@ -184,52 +184,56 @@ class TestGetAttrFromRow:
     """Tests for getattr_from_row."""
 
     def test_pathway_overlap(self):
-        # Row tuple: (id, composite, pathway, expression, lit, clinical, safety, novelty, ...)
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        # Row tuple: (id, composite, pathway, expression, lit, clinical, safety, novelty, causal, gnn, mut, poly, pharma)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "pathway_overlap") == 65.0
 
     def test_expression_correlation(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "expression_correlation") == 70.0
 
     def test_literature_support(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "literature_support") == 55.0
 
     def test_clinical_evidence(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "clinical_evidence") == 40.0
 
     def test_safety(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "safety") == 85.0
 
     def test_novelty(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "novelty") == 90.0
 
     def test_causal_dependency(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "causal_dependency") == 30.0
 
     def test_gnn_link(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "gnn_link") == 15.0
 
     def test_mutation_context(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 20.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 20.0, 0.0, 0.0)
         assert getattr_from_row(row, "mutation_context") == 20.0
 
     def test_polypharmacology(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 20.0, 10.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 20.0, 10.0, 0.0)
         assert getattr_from_row(row, "polypharmacology") == 10.0
 
+    def test_pharmacological_response(self):
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 15.0, 20.0, 10.0, 45.0)
+        assert getattr_from_row(row, "pharmacological_response") == 45.0
+
     def test_unknown_dimension(self):
-        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, 65.0, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "nonexistent_dimension") == 0.0
 
     def test_none_value_returns_zero(self):
-        row = (1, 80.0, None, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0)
+        row = (1, 80.0, None, 70.0, 55.0, 40.0, 85.0, 90.0, 30.0, 0.0, 0.0, 0.0, 0.0)
         assert getattr_from_row(row, "pathway_overlap") == 0.0
 
 

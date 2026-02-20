@@ -137,9 +137,9 @@ class TestComputeCompositeScore:
         scores["pathway_overlap"]["score"] = 80
         scores["novelty"]["score"] = 90
         result = config.compute_composite_score(scores, DEFAULT_WEIGHTS)
-        # 80*0.14 + 50*0.14 + 50*0.12 + 50*0.10 + 50*0.07 + 90*0.10
-        # + 50*0.13 + 50*0.0 + 50*0.12 + 50*0.08 = 58.2
-        assert result == 58.2
+        # 80*0.12 + 50*0.12 + 50*0.10 + 50*0.09 + 50*0.06 + 90*0.09
+        # + 50*0.12 + 50*0.0 + 50*0.10 + 50*0.07 + 50*0.13 = 57.2
+        assert result == 57.2
 
     def test_capped_at_100(self):
         """Composite never exceeds 100 even with abnormal scores."""
@@ -158,7 +158,7 @@ class TestComputeCompositeScore:
             # Missing all others
         }
         result = config.compute_composite_score(scores, DEFAULT_WEIGHTS)
-        assert result == 14.0  # 100 * 0.14
+        assert result == 12.0  # 100 * 0.12
 
     def test_missing_score_key_defaults_to_zero(self):
         """Dimension dict without 'score' key treated as 0."""
@@ -256,7 +256,7 @@ class TestGetActiveWeights:
 
 class TestDimensions:
     def test_dimension_count(self):
-        assert len(DIMENSIONS) == 10
+        assert len(DIMENSIONS) == 11
 
     def test_all_dimensions_in_default_weights(self):
         for dim in DIMENSIONS:

@@ -222,6 +222,7 @@ def make_hypothesis(
     gnn_link_score: float = 0.0,
     mutation_context_score: float = 0.0,
     polypharmacology_score: float = 0.0,
+    pharmacological_response_score: float = 0.0,
     **kwargs,
 ) -> MagicMock:
     h = MagicMock()
@@ -240,6 +241,7 @@ def make_hypothesis(
     h.gnn_link_score = gnn_link_score
     h.mutation_context_score = mutation_context_score
     h.polypharmacology_score = polypharmacology_score
+    h.pharmacological_response_score = pharmacological_response_score
     for k, v in kwargs.items():
         setattr(h, k, v)
     return h

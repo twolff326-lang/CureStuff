@@ -1,6 +1,6 @@
 """Evidence scoring service for hypothesis composite scoring.
 
-Implements 7 independent scoring dimensions (each 0-100):
+Implements 11 independent scoring dimensions (each 0-100):
   1. pathway_overlap     — Fisher's exact + hypergeometric FDR-corrected p-values
   2. expression_correlation — Pharmacological compatibility using binding affinity (Ki/IC50)
   3. literature_support   — Quality-weighted literature scoring (journal, study type, recency)
@@ -8,6 +8,10 @@ Implements 7 independent scoring dimensions (each 0-100):
   5. safety               — Drug safety/approval status and known toxicity
   6. novelty              — Inverse of existing evidence (fewer papers/trials = more novel)
   7. causal_dependency    — DepMap CRISPR essentiality (does KO of drug target kill cancer?)
+  8. gnn_link             — GNN link prediction (deep learning on knowledge graph)
+  9. mutation_context     — Mutation-conditional vulnerability (CRISPR + mutation)
+  10. polypharmacology    — Off-target bioassay activity (unexpected targets)
+  11. pharmacological_response — PRISM/GDSC drug sensitivity screens (cell line response)
 
 Each scorer returns:
   {"score": 0-100, "details": {...}, "evidence": [...], "confidence_interval": {...}}
@@ -1681,6 +1685,60 @@ class EvidenceScorer:
         }
 
     # ------------------------------------------------------------------
+    # 11. Pharmacological Response Score (PRISM/GDSC Drug Screens)
+    # ------------------------------------------------------------------
+
+    async def score_pharmacological_response(
+        self,
+        drug_id: int,
+        cancer_type_id: int,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        """Score based on PRISM/GDSC drug sensitivity screen data.
+
+        PRISM (Broad Institute) and GDSC (Sanger) screen thousands of drugs
+        against cancer cell lines with full molecular profiles. This dimension
+        provides DIRECT pharmacological evidence — measured cell viability
+        rather than inferential compatibility.
+
+        Data sources:
+          - DepMap PRISM Repurposing screen (Corsello et al. 2020, Nat Cancer)
+          - GDSC (Genomics of Drug Sensitivity in Cancer, Sanger)
+          - Cell line molecular profiles from CCLE
+
+        Scoring components (when data is available):
+          - Screen hit rate: % of relevant cell lines showing sensitivity (up to 40 pts)
+          - Potency: best IC50/AUC across relevant cell lines (up to 30 pts)
+          - Lineage specificity: sensitivity specific to cancer lineage (up to 20 pts)
+          - Reproducibility: consistency across screen replicates (up to 10 pts)
+
+        Returns score 0 when PRISM/GDSC data has not yet been ingested.
+        The dimension activates once the PRISM ingestion connector populates
+        the drug_sensitivity_screens table.
+        """
+        # PRISM/GDSC data ingestion is a future pipeline step.
+        # This scorer returns 0 gracefully until data is available,
+        # matching the pattern used by score_gnn_link() before GNN training.
+        return {
+            "score": 0,
+            "details": {
+                "reason": "awaiting_prism_gdsc_ingestion",
+                "note": (
+                    "PRISM/GDSC drug sensitivity screen data not yet ingested. "
+                    "This dimension will activate once the PRISM connector "
+                    "populates screen results for this drug-cancer pair."
+                ),
+                "data_sources": ["PRISM (Broad)", "GDSC (Sanger)"],
+            },
+            "evidence": [],
+            "confidence_interval": {
+                "point_estimate": 0,
+                "ci_lower": 0,
+                "ci_upper": 0,
+            },
+        }
+
+    # ------------------------------------------------------------------
     # Composite scoring
     # ------------------------------------------------------------------
 
@@ -1691,7 +1749,7 @@ class EvidenceScorer:
         db: AsyncSession,
         pathway_data: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Score all 10 dimensions for a drug-cancer pair.
+        """Score all 11 dimensions for a drug-cancer pair.
 
         Returns a dict keyed by dimension name, each containing:
           {"score": int, "details": dict, "evidence": list}
@@ -1701,6 +1759,7 @@ class EvidenceScorer:
           8: GNN link prediction
           9: Mutation-context (conditional vulnerability via mutations)
           10: Polypharmacology (off-target bioassay activity)
+          11: Pharmacological response (PRISM/GDSC drug screens)
         """
         results = {}
 
@@ -1732,6 +1791,9 @@ class EvidenceScorer:
             drug_id, cancer_type_id, db
         )
         results["polypharmacology"] = await self.score_polypharmacology(
+            drug_id, cancer_type_id, db
+        )
+        results["pharmacological_response"] = await self.score_pharmacological_response(
             drug_id, cancer_type_id, db
         )
 

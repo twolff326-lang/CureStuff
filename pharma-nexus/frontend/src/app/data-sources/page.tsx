@@ -36,6 +36,8 @@ const sources: SourceDef[] = [
   // Literature
   { name: "PubMed", sourceKey: "literature", description: "Published biomedical literature", category: "literature" },
   { name: "ClinicalTrials.gov", sourceKey: "clinical_trials", description: "Active and completed trial data", category: "literature" },
+  // Drug sensitivity screens
+  { name: "PRISM / GDSC", sourceKey: "prism", description: "Drug sensitivity screens — cell line viability (Broad/Sanger)", category: "drugs" },
   // Computed pipelines
   { name: "Expression Analysis", sourceKey: "full_expression_analysis", description: "Differential expression, pathway activity, drug scores", category: "analysis" },
   { name: "Knowledge Graph", sourceKey: "knowledge_graph", description: "Sync all data to Neo4j for graph queries", category: "analysis" },

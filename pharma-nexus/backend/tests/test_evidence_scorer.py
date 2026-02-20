@@ -764,9 +764,9 @@ class TestScoreNovelty:
 
 class TestScoreAllDimensions:
     @pytest.mark.asyncio
-    async def test_returns_all_ten_dimensions(self):
-        """score_all_dimensions returns all 10 dimension keys."""
-        # We need mock results for all 10 scorers
+    async def test_returns_all_eleven_dimensions(self):
+        """score_all_dimensions returns all 11 dimension keys."""
+        # We need mock results for all 11 scorers
         db = MockSession()
 
         # Pathway (uses pathway_data param, no DB calls)
@@ -803,6 +803,8 @@ class TestScoreAllDimensions:
         db.queue_result(MockResult(rows=[]))  # official targets
         db.queue_result(MockResult(rows=[]))  # bioassay hits
 
+        # Pharmacological response: no DB calls needed (returns 0)
+
         pathway_data = {
             "shared_pathways": [],
             "shared_count": 0,
@@ -825,6 +827,7 @@ class TestScoreAllDimensions:
             "gnn_link",
             "mutation_context",
             "polypharmacology",
+            "pharmacological_response",
         }
         assert set(result.keys()) == expected_keys
 

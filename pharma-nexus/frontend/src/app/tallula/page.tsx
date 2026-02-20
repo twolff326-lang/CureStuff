@@ -66,6 +66,9 @@ const DIMENSION_LABELS: Record<string, string> = {
   safety: "Safety",
   novelty: "Novelty",
   causal_dependency: "Causal Dependency",
+  mutation_context: "Mutation Context",
+  polypharmacology: "Polypharmacology",
+  pharmacological_response: "Drug Sensitivity",
 };
 
 const BAR_COLORS: Record<string, string> = {

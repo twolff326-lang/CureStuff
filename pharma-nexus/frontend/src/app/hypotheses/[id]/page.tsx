@@ -70,6 +70,12 @@ const DIMENSION_META: Record<
       "Off-target bioassay activity against cancer-relevant proteins beyond official drug targets",
     color: "#0891b2",
   },
+  pharmacological_response: {
+    label: "Drug Sensitivity",
+    description:
+      "PRISM/GDSC drug sensitivity screen evidence from cancer cell line response rates",
+    color: "#6366f1",
+  },
 };
 
 export default function HypothesisDetailPage() {

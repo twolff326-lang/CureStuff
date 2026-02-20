@@ -343,6 +343,7 @@ class TestTallulaEngine:
                     "gnn_link": 0.0,
                     "mutation_context": 0.0,
                     "polypharmacology": 0.0,
+                    "pharmacological_response": 0.0,
                 },
             },
             # Should be WEAK: low everywhere

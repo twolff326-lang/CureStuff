@@ -160,6 +160,11 @@ async def get_hypothesis_stats(db: AsyncSession = Depends(get_db)):
             func.avg(Hypothesis.clinical_evidence_score),
             func.avg(Hypothesis.safety_score),
             func.avg(Hypothesis.novelty_score),
+            func.avg(Hypothesis.causal_dependency_score),
+            func.avg(Hypothesis.gnn_link_score),
+            func.avg(Hypothesis.mutation_context_score),
+            func.avg(Hypothesis.polypharmacology_score),
+            func.avg(Hypothesis.pharmacological_response_score),
         )
     )
     avg_row = avg_result.first()
@@ -192,6 +197,11 @@ async def get_hypothesis_stats(db: AsyncSession = Depends(get_db)):
             "clinical_evidence": round(avg_row[4] or 0, 1),
             "safety": round(avg_row[5] or 0, 1),
             "novelty": round(avg_row[6] or 0, 1),
+            "causal_dependency": round(avg_row[7] or 0, 1),
+            "gnn_link": round(avg_row[8] or 0, 1),
+            "mutation_context": round(avg_row[9] or 0, 1),
+            "polypharmacology": round(avg_row[10] or 0, 1),
+            "pharmacological_response": round(avg_row[11] or 0, 1),
         },
         "top_cancer_types": top_cancers,
     }
@@ -630,6 +640,7 @@ def _serialize_hypothesis(h: Hypothesis) -> dict:
             "causal_dependency": h.causal_dependency_score,
             "mutation_context": h.mutation_context_score,
             "polypharmacology": h.polypharmacology_score,
+            "pharmacological_response": h.pharmacological_response_score,
         },
         "statistical": {
             "p_value": h.p_value,
