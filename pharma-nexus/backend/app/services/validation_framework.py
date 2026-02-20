@@ -8,14 +8,21 @@ a tool into a validated method. It answers the fundamental question:
 Components:
   1. Ground Truth Assembly — Known successful drug repurposing cases from
      RepoDB, FDA approval history, and literature-confirmed cases.
-  2. Retrospective Validation — Rank recovery analysis: given known successes,
+  2. Negative Controls — Known failed drug repurposing attempts from
+     terminated Phase 2/3 clinical trials to avoid scoring false positives.
+  3. Retrospective Validation — Rank recovery analysis: given known successes,
      where does our scoring rank them among all candidates?
-  3. ROC/AUC Metrics — Area under the receiver operating characteristic curve
+  4. ROC/AUC Metrics — Area under the receiver operating characteristic curve
      measuring discrimination between true positives and negatives.
-  4. Ablation Studies — Leave-one-dimension-out analysis to quantify each
+  5. Ablation Studies — Leave-one-dimension-out analysis to quantify each
      scoring dimension's contribution to predictive performance.
-  5. Calibration Analysis — Does a score of 70 correspond to ~70% likelihood
+  6. Calibration Analysis — Does a score of 70 correspond to ~70% likelihood
      of being a true positive?
+  7. Temporal Cross-Validation — Train on established cases, test on recent
+     approvals to assess prospective predictive power.
+  8. Benchmark Baselines — Compare scoring against random, single-dimension,
+     and naive baselines to demonstrate added value.
+  9. Sensitivity Analysis — Assess robustness of results to weight perturbations.
 
 References:
   - Brown & Patel (2017). Drug repurposing: A review of current approaches.
@@ -57,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Format: (drug_name_fragment, cancer_name_fragment, evidence_level)
 # evidence_level: "fda_approved" | "phase3_success" | "phase2_positive" | "preclinical_validated"
 #
-# 131 cases across 4 evidence tiers. Organized by:
+# 132 cases across 4 evidence tiers. Organized by:
 #   1. Non-cancer → cancer repurposing (FDA-approved)
 #   2. Cancer indication expansions (FDA-approved)
 #   3. Phase 3 successes
@@ -337,6 +344,197 @@ KNOWN_REPURPOSING_CASES = [
 ]
 
 
+# ===================================================================
+# NEGATIVE CONTROLS: Known drug repurposing failures
+# ===================================================================
+
+# Curated from terminated Phase 2/3 clinical trials where drugs
+# failed to show efficacy for the tested cancer indication.
+# These serve as true negatives for validation: the system SHOULD
+# score these lower than known successes.
+#
+# Format: (drug_name_fragment, cancer_name_fragment, failure_stage, reason)
+# failure_stage: "phase3_failed" | "phase2_failed" | "withdrawn"
+# reason: brief explanation of why the drug failed
+KNOWN_REPURPOSING_FAILURES = [
+    # ===================================================================
+    # PHASE 3 FAILURES: Drugs that failed Phase 3 for cancer indication
+    # ===================================================================
+    #
+    # NOTE: Excluded pairs that also appear in KNOWN_REPURPOSING_CASES to
+    # avoid DB-level contradictions (fragment matching can't distinguish
+    # clinical settings like adjuvant vs metastatic):
+    #   - bevacizumab + colorectal (FDA-approved metastatic, failed adjuvant)
+    #   - metformin + pancreatic (Phase 2 positive early-stage, Phase 3 MAPPA failed advanced)
+    #   - sorafenib + hepatocellular (FDA-approved advanced, failed adjuvant STORM)
+
+    # Celecoxib failed in APC prevention (terminated due to cardiovascular risk)
+    ("celecoxib", "pancreatic", "phase3_failed", "no survival benefit, cardiovascular risk"),
+
+    # Cimetidine failed Phase 3 for gastric cancer (Japanese RCT)
+    ("cimetidine", "gastric", "phase3_failed", "no survival benefit"),
+
+    # Chloroquine/HCQ failed in multiple Phase 2/3 combinations
+    ("hydroxychloroquine", "lung", "phase3_failed", "no improvement in autophagy-targeted therapy"),
+
+    # Fenretinide (retinoid) failed breast cancer prevention Phase 3
+    ("fenretinide", "breast", "phase3_failed", "no benefit in secondary prevention"),
+
+    # Iniparib (misidentified PARP inhibitor) failed Phase 3 TNBC
+    ("iniparib", "breast", "phase3_failed", "not actually a PARP inhibitor, no PFS benefit"),
+
+    # Enzastaurin (PKC-beta inhibitor) failed Phase 3 GBM
+    ("enzastaurin", "glioblastoma", "phase3_failed", "no PFS benefit vs lomustine"),
+
+    # Bavituximab (anti-phosphatidylserine) failed Phase 3 NSCLC
+    ("bavituximab", "lung", "phase3_failed", "no OS benefit with docetaxel"),
+
+    # ===================================================================
+    # PHASE 2 FAILURES: Drugs that showed no efficacy in Phase 2
+    # ===================================================================
+
+    # Disulfiram failed Phase 2 for liver cancer
+    ("disulfiram", "hepatocellular", "phase2_failed", "no objective response"),
+
+    # Valproic acid no benefit in solid tumors (multiple Phase 2)
+    ("valproic acid", "lung", "phase2_failed", "no single-agent activity"),
+    ("valproic acid", "melanoma", "phase2_failed", "no objective response"),
+
+    # Cimetidine no benefit in NSCLC
+    ("cimetidine", "lung", "phase2_failed", "no clinical activity"),
+
+    # Nelfinavir no benefit in adenoid cystic carcinoma
+    ("nelfinavir", "head and neck", "phase2_failed", "no RECIST response"),
+
+    # Chloroquine no benefit in NSCLC
+    ("chloroquine", "lung", "phase2_failed", "no improvement with erlotinib"),
+
+    # Statins failed Phase 2 in hepatocellular
+    ("simvastatin", "hepatocellular", "phase2_failed", "no single-agent activity"),
+    ("pravastatin", "hepatocellular", "phase2_failed", "no survival benefit"),
+
+    # Thioridazine failed for solid tumors (toxicity limited)
+    ("thioridazine", "breast", "phase2_failed", "QTc prolongation, no efficacy"),
+
+    # Itraconazole no benefit in ovarian cancer
+    ("itraconazole", "ovarian", "phase2_failed", "no single-agent activity"),
+
+    # Propranolol no benefit in melanoma as single agent (Phase 2)
+    ("propranolol", "lung", "phase2_failed", "no single-agent activity"),
+
+    # Suramin neurotoxicity limited Phase 2 for non-prostate cancers
+    ("suramin", "lung", "phase2_failed", "severe neurotoxicity, no efficacy"),
+
+    # Doxycycline no benefit in prostate cancer
+    ("doxycycline", "prostate", "phase2_failed", "no PSA response"),
+
+    # Auranofin no benefit in GBM (Phase 2 terminated)
+    ("auranofin", "glioblastoma", "phase2_failed", "poor CNS penetration, no response"),
+
+    # Sulfasalazine failed Phase 2 for non-GBM brain tumors
+    ("sulfasalazine", "breast", "phase2_failed", "no systemic activity"),
+
+    # ===================================================================
+    # WITHDRAWN: Drugs withdrawn from cancer indication after initial approval
+    # ===================================================================
+
+    # Bevacizumab breast cancer approval withdrawn by FDA (2011)
+    ("bevacizumab", "breast", "withdrawn", "FDA withdrew approval, no OS benefit"),
+
+    # Gemtuzumab ozogamicin initially withdrawn (later re-approved at lower dose)
+    ("gemtuzumab", "leukemia", "withdrawn", "veno-occlusive disease, initially pulled"),
+
+    # Ponatinib briefly withdrawn for vascular events
+    ("ponatinib", "leukemia", "withdrawn", "serious vascular events"),
+]
+
+
+# ===================================================================
+# TEMPORAL COHORTS: Ground truth split by approval era
+# ===================================================================
+
+# Cases grouped by era for temporal cross-validation.
+# "established" cases (pre-2010) serve as training data.
+# "recent" cases (2010+) serve as held-out test data.
+TEMPORAL_COHORTS = {
+    "established": [
+        # Pre-2010 FDA approvals — these are the training set
+        ("thalidomide", "multiple myeloma", "fda_approved"),
+        ("lenalidomide", "multiple myeloma", "fda_approved"),
+        ("all-trans retinoic acid", "acute promyelocytic leukemia", "fda_approved"),
+        ("arsenic trioxide", "acute promyelocytic leukemia", "fda_approved"),
+        ("vorinostat", "cutaneous t-cell lymphoma", "fda_approved"),
+        ("bortezomib", "mantle cell lymphoma", "fda_approved"),
+        ("tamoxifen", "breast", "fda_approved"),
+        ("methotrexate", "breast", "fda_approved"),
+        ("gemcitabine", "pancreatic", "fda_approved"),
+        ("gemcitabine", "bladder", "fda_approved"),
+        ("gemcitabine", "lung", "fda_approved"),
+        ("interferon alfa", "melanoma", "fda_approved"),
+        ("interferon alfa", "renal cell", "fda_approved"),
+        ("interferon alfa", "leukemia", "fda_approved"),
+        ("imatinib", "gastrointestinal stromal", "fda_approved"),
+        ("bevacizumab", "colorectal", "fda_approved"),
+        ("sorafenib", "renal cell", "fda_approved"),
+        ("sunitinib", "gastrointestinal stromal", "fda_approved"),
+        ("temozolomide", "glioblastoma", "fda_approved"),
+        ("rituximab", "lymphoma", "fda_approved"),
+        ("rituximab", "leukemia", "fda_approved"),
+        ("dexamethasone", "multiple myeloma", "fda_approved"),
+        ("rapamycin", "renal cell", "fda_approved"),
+        ("hydroxyurea", "leukemia", "fda_approved"),
+        ("bexarotene", "cutaneous t-cell lymphoma", "fda_approved"),
+        ("romidepsin", "cutaneous t-cell lymphoma", "fda_approved"),
+        ("temsirolimus", "renal cell", "fda_approved"),
+        ("paclitaxel", "breast", "fda_approved"),
+        ("paclitaxel", "lung", "fda_approved"),
+        ("docetaxel", "prostate", "fda_approved"),
+        ("raloxifene", "breast", "fda_approved"),
+    ],
+    "recent": [
+        # 2010+ FDA approvals — these are the held-out test set
+        ("pomalidomide", "multiple myeloma", "fda_approved"),
+        ("belinostat", "peripheral t-cell lymphoma", "fda_approved"),
+        ("panobinostat", "multiple myeloma", "fda_approved"),
+        ("everolimus", "breast", "fda_approved"),
+        ("everolimus", "renal cell", "fda_approved"),
+        ("everolimus", "pancreatic", "fda_approved"),
+        ("bevacizumab", "lung", "fda_approved"),
+        ("bevacizumab", "glioblastoma", "fda_approved"),
+        ("bevacizumab", "ovarian", "fda_approved"),
+        ("bevacizumab", "cervical", "fda_approved"),
+        ("sorafenib", "hepatocellular", "fda_approved"),
+        ("sorafenib", "thyroid", "fda_approved"),
+        ("sunitinib", "pancreatic", "fda_approved"),
+        ("pazopanib", "soft tissue sarcoma", "fda_approved"),
+        ("lenvatinib", "hepatocellular", "fda_approved"),
+        ("lenvatinib", "endometrial", "fda_approved"),
+        ("cabozantinib", "hepatocellular", "fda_approved"),
+        ("cabozantinib", "renal cell", "fda_approved"),
+        ("nivolumab", "melanoma", "fda_approved"),
+        ("nivolumab", "lung", "fda_approved"),
+        ("nivolumab", "renal cell", "fda_approved"),
+        ("nivolumab", "bladder", "fda_approved"),
+        ("nivolumab", "head and neck", "fda_approved"),
+        ("nivolumab", "hepatocellular", "fda_approved"),
+        ("pembrolizumab", "lung", "fda_approved"),
+        ("pembrolizumab", "melanoma", "fda_approved"),
+        ("pembrolizumab", "head and neck", "fda_approved"),
+        ("pembrolizumab", "bladder", "fda_approved"),
+        ("pembrolizumab", "gastric", "fda_approved"),
+        ("pembrolizumab", "cervical", "fda_approved"),
+        ("ipilimumab", "melanoma", "fda_approved"),
+        ("ipilimumab", "renal cell", "fda_approved"),
+        ("olaparib", "breast", "fda_approved"),
+        ("olaparib", "prostate", "fda_approved"),
+        ("olaparib", "pancreatic", "fda_approved"),
+        ("trastuzumab", "gastric", "fda_approved"),
+        ("denosumab", "giant cell tumor", "fda_approved"),
+        ("zoledronic acid", "multiple myeloma", "fda_approved"),
+    ],
+}
+
+
 class ValidationFramework:
     """Retrospective validation and performance assessment for the scoring system.
 
@@ -425,7 +623,9 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_retrospective_validation(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Full retrospective validation pipeline.
 
@@ -435,11 +635,15 @@ class ValidationFramework:
         4. Compute rank recovery, ROC-AUC, PR-AUC
         5. Return detailed performance metrics
 
+        Args:
+            ground_truth: Pre-built ground truth dict (avoids redundant DB queries)
+
         Returns:
             dict with comprehensive validation results
         """
         # Step 1: Ground truth
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -607,11 +811,13 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_ablation_study(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Leave-one-dimension-out ablation study.
 
-        For each of the 6 scoring dimensions, re-compute composite scores
+        For each of the 10 scoring dimensions, re-compute composite scores
         with that dimension zeroed out and measure the impact on ROC-AUC.
 
         Answers: "Which dimensions actually matter for prediction?"
@@ -619,7 +825,8 @@ class ValidationFramework:
         Returns:
             dict with per-dimension ablation results and importance ranking
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -722,14 +929,18 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_calibration_analysis(
-        self, db: AsyncSession, n_bins: int = 10
+        self,
+        db: AsyncSession,
+        n_bins: int = 10,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assess score calibration: does a score of X mean X% probability?
 
         Returns:
             dict with calibration curve data, Brier score, expected calibration error
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -879,6 +1090,631 @@ class ValidationFramework:
             },
         }
 
+    # ==================================================================
+    # Negative Control Validation
+    # ==================================================================
+
+    async def build_negative_controls(
+        self, db: AsyncSession
+    ) -> dict[str, Any]:
+        """Match known repurposing failures to drug-cancer pairs in our database.
+
+        Returns:
+            dict with matched failures, unmatched failures, coverage statistics
+        """
+        matched = []
+        unmatched = []
+
+        for drug_fragment, cancer_fragment, failure_stage, reason in KNOWN_REPURPOSING_FAILURES:
+            drug_result = await db.execute(
+                select(Drug.id, Drug.name).where(
+                    Drug.name.ilike(f"%{drug_fragment}%")
+                ).limit(1)
+            )
+            drug_row = drug_result.first()
+
+            cancer_result = await db.execute(
+                select(CancerType.id, CancerType.name).where(
+                    CancerType.name.ilike(f"%{cancer_fragment}%")
+                ).limit(1)
+            )
+            cancer_row = cancer_result.first()
+
+            if drug_row and cancer_row:
+                matched.append({
+                    "drug_id": drug_row[0],
+                    "drug_name": drug_row[1],
+                    "cancer_type_id": cancer_row[0],
+                    "cancer_name": cancer_row[1],
+                    "failure_stage": failure_stage,
+                    "reason": reason,
+                    "ground_truth_label": 0,
+                })
+            else:
+                unmatched.append({
+                    "drug_fragment": drug_fragment,
+                    "cancer_fragment": cancer_fragment,
+                    "failure_stage": failure_stage,
+                    "reason": reason,
+                    "drug_found": drug_row is not None,
+                    "cancer_found": cancer_row is not None,
+                })
+
+        return {
+            "matched_failures": matched,
+            "unmatched_failures": unmatched,
+            "n_matched": len(matched),
+            "n_unmatched": len(unmatched),
+            "coverage": (
+                len(matched) / len(KNOWN_REPURPOSING_FAILURES)
+                if KNOWN_REPURPOSING_FAILURES else 0
+            ),
+            "by_failure_stage": {
+                stage: sum(1 for c in matched if c["failure_stage"] == stage)
+                for stage in ("phase3_failed", "phase2_failed", "withdrawn")
+            },
+        }
+
+    async def run_positive_negative_validation(
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
+        negative_controls: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate using both positive (known successes) and negative (known failures) controls.
+
+        Unlike run_retrospective_validation which treats all non-positive cases
+        as negatives, this uses explicitly curated failure cases to provide
+        cleaner discrimination metrics.
+
+        Returns:
+            dict with ROC-AUC, score separation, and case-level details
+        """
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
+        if negative_controls is None:
+            negative_controls = await self.build_negative_controls(db)
+
+        positive_pairs = {
+            (c["drug_id"], c["cancer_type_id"]): c
+            for c in ground_truth["matched_cases"]
+        }
+        negative_pairs = {
+            (c["drug_id"], c["cancer_type_id"]): c
+            for c in negative_controls["matched_failures"]
+        }
+
+        # Remove any overlap (a drug-cancer pair in both sets)
+        overlap = set(positive_pairs.keys()) & set(negative_pairs.keys())
+        for pair in overlap:
+            del negative_pairs[pair]
+
+        if not positive_pairs or not negative_pairs:
+            return {
+                "error": "Need both positive and negative matched cases",
+                "n_positive_matched": len(positive_pairs),
+                "n_negative_matched": len(negative_pairs),
+            }
+
+        # Get all hypotheses and filter to known pairs
+        result = await db.execute(
+            select(Hypothesis).order_by(Hypothesis.composite_score.desc())
+        )
+        all_hypotheses = result.scalars().all()
+
+        labels = []
+        scores = []
+        case_details = []
+
+        for hyp in all_hypotheses:
+            pair = (hyp.drug_id, hyp.cancer_type_id)
+            if pair in positive_pairs:
+                labels.append(1)
+                scores.append(hyp.composite_score)
+                case_details.append({
+                    "drug_name": positive_pairs[pair].get("drug_name", ""),
+                    "cancer_name": positive_pairs[pair].get("cancer_name", ""),
+                    "composite_score": hyp.composite_score,
+                    "label": "positive",
+                    "evidence_level": positive_pairs[pair].get("evidence_level", ""),
+                })
+            elif pair in negative_pairs:
+                labels.append(0)
+                scores.append(hyp.composite_score)
+                case_details.append({
+                    "drug_name": negative_pairs[pair].get("drug_name", ""),
+                    "cancer_name": negative_pairs[pair].get("cancer_name", ""),
+                    "composite_score": hyp.composite_score,
+                    "label": "negative",
+                    "failure_stage": negative_pairs[pair].get("failure_stage", ""),
+                    "reason": negative_pairs[pair].get("reason", ""),
+                })
+
+        if not labels:
+            return {
+                "error": "No hypotheses matched any positive or negative control pairs",
+                "n_positive_pairs_in_db": len(positive_pairs),
+                "n_negative_pairs_in_db": len(negative_pairs),
+                "n_hypotheses_total": len(all_hypotheses),
+            }
+
+        labels_arr = np.array(labels)
+        scores_arr = np.array(scores)
+        n_pos = int(labels_arr.sum())
+        n_neg = len(labels_arr) - n_pos
+
+        metrics = {
+            "n_positive": n_pos,
+            "n_negative": n_neg,
+            "n_overlap_removed": len(overlap),
+        }
+
+        if n_pos > 0 and n_neg > 0:
+            # ROC-AUC on curated positive vs negative
+            try:
+                roc_auc_val = float(roc_auc_score(labels_arr, scores_arr))
+                metrics["roc_auc"] = round(roc_auc_val, 4)
+                metrics["roc_interpretation"] = _interpret_auc(roc_auc_val)
+            except Exception as e:
+                logger.warning("ROC-AUC on pos/neg controls failed: %s", e)
+
+            # Score separation
+            pos_scores = scores_arr[labels_arr == 1]
+            neg_scores = scores_arr[labels_arr == 0]
+            metrics["positive_score_mean"] = round(float(pos_scores.mean()), 2)
+            metrics["positive_score_std"] = round(float(pos_scores.std()), 2)
+            metrics["negative_score_mean"] = round(float(neg_scores.mean()), 2)
+            metrics["negative_score_std"] = round(float(neg_scores.std()), 2)
+            metrics["score_gap"] = round(
+                float(pos_scores.mean() - neg_scores.mean()), 2
+            )
+
+            # Mann-Whitney U
+            u_stat, u_pval = scipy_stats.mannwhitneyu(
+                pos_scores, neg_scores, alternative="greater"
+            )
+            metrics["mann_whitney_u"] = float(u_stat)
+            metrics["mann_whitney_p"] = float(u_pval)
+
+            # Cohen's d effect size (requires >= 2 samples per group for meaningful std)
+            pooled_std = np.sqrt(
+                (pos_scores.std() ** 2 + neg_scores.std() ** 2) / 2
+            )
+            if pooled_std > 0 and len(pos_scores) >= 2 and len(neg_scores) >= 2:
+                cohens_d = float(
+                    (pos_scores.mean() - neg_scores.mean()) / pooled_std
+                )
+                metrics["cohens_d"] = round(cohens_d, 3)
+                metrics["effect_size_interpretation"] = _interpret_effect_size(cohens_d)
+
+        return {
+            "metrics": metrics,
+            "case_details": sorted(
+                case_details, key=lambda x: x["composite_score"], reverse=True
+            ),
+            "positive_controls_coverage": ground_truth["coverage"],
+            "negative_controls_coverage": negative_controls["coverage"],
+        }
+
+    # ==================================================================
+    # Temporal Cross-Validation
+    # ==================================================================
+
+    async def run_temporal_validation(
+        self, db: AsyncSession
+    ) -> dict[str, Any]:
+        """Temporal cross-validation: train on established cases, test on recent.
+
+        Simulates prospective prediction by:
+        1. Using pre-2010 approved drugs as the "training" set (known positives)
+        2. Evaluating whether 2010+ approvals would be ranked highly
+
+        This answers: "Would our system have predicted recent approvals
+        using only knowledge of older ones?"
+
+        Returns:
+            dict with train/test split metrics and prospective AUC
+        """
+        established_cases = TEMPORAL_COHORTS["established"]
+        recent_cases = TEMPORAL_COHORTS["recent"]
+
+        # Match established cases to DB
+        established_pairs = set()
+        for drug_fragment, cancer_fragment, _ in established_cases:
+            drug_result = await db.execute(
+                select(Drug.id).where(
+                    Drug.name.ilike(f"%{drug_fragment}%")
+                ).limit(1)
+            )
+            drug_row = drug_result.first()
+            cancer_result = await db.execute(
+                select(CancerType.id).where(
+                    CancerType.name.ilike(f"%{cancer_fragment}%")
+                ).limit(1)
+            )
+            cancer_row = cancer_result.first()
+            if drug_row and cancer_row:
+                established_pairs.add((drug_row[0], cancer_row[0]))
+
+        # Match recent cases to DB
+        recent_pairs = set()
+        for drug_fragment, cancer_fragment, _ in recent_cases:
+            drug_result = await db.execute(
+                select(Drug.id).where(
+                    Drug.name.ilike(f"%{drug_fragment}%")
+                ).limit(1)
+            )
+            drug_row = drug_result.first()
+            cancer_result = await db.execute(
+                select(CancerType.id).where(
+                    CancerType.name.ilike(f"%{cancer_fragment}%")
+                ).limit(1)
+            )
+            cancer_row = cancer_result.first()
+            if drug_row and cancer_row:
+                recent_pairs.add((drug_row[0], cancer_row[0]))
+
+        if not established_pairs or not recent_pairs:
+            return {
+                "error": "Insufficient matched cases for temporal validation",
+                "n_established_matched": len(established_pairs),
+                "n_recent_matched": len(recent_pairs),
+            }
+
+        # Get all hypotheses
+        result = await db.execute(
+            select(Hypothesis).order_by(Hypothesis.composite_score.desc())
+        )
+        all_hypotheses = result.scalars().all()
+        n_total = len(all_hypotheses)
+
+        if n_total == 0:
+            return {"error": "No hypotheses scored yet"}
+
+        # Evaluate: among all hypotheses, where do recent cases rank?
+        # (Training cases are treated as "known" — only recent cases are evaluated)
+        recent_ranks = []
+
+        for rank, hyp in enumerate(all_hypotheses, 1):
+            pair = (hyp.drug_id, hyp.cancer_type_id)
+            if pair in recent_pairs:
+                recent_ranks.append(rank)
+
+        # Labels for AUC: recent cases = positive, everything except
+        # established = negative (exclude established to avoid leakage)
+        test_labels = []
+        test_scores = []
+        for hyp in all_hypotheses:
+            pair = (hyp.drug_id, hyp.cancer_type_id)
+            if pair in established_pairs:
+                continue  # Exclude training set from evaluation
+            test_labels.append(1 if pair in recent_pairs else 0)
+            test_scores.append(hyp.composite_score)
+
+        test_labels_arr = np.array(test_labels)
+        test_scores_arr = np.array(test_scores)
+        n_recent_in_test = int(test_labels_arr.sum())
+
+        metrics = {
+            "n_established_matched": len(established_pairs),
+            "n_recent_matched": len(recent_pairs),
+            "n_recent_found_in_hypotheses": len(recent_ranks),
+            "n_test_set": len(test_labels),
+        }
+
+        if recent_ranks:
+            metrics["prospective_rank_recovery"] = {
+                "mean_rank": round(float(np.mean(recent_ranks)), 1),
+                "median_rank": round(float(np.median(recent_ranks)), 1),
+                "mean_percentile": round(
+                    float(np.mean([1 - r / n_total for r in recent_ranks])) * 100, 1
+                ),
+                "top_10pct": sum(
+                    1 for r in recent_ranks if r <= n_total * 0.10
+                ),
+                "top_25pct": sum(
+                    1 for r in recent_ranks if r <= n_total * 0.25
+                ),
+            }
+        else:
+            metrics["prospective_rank_recovery"] = None
+
+        if n_recent_in_test > 0 and n_recent_in_test < len(test_labels):
+            try:
+                prospective_auc = float(
+                    roc_auc_score(test_labels_arr, test_scores_arr)
+                )
+                metrics["prospective_roc_auc"] = round(prospective_auc, 4)
+                metrics["prospective_interpretation"] = _interpret_auc(
+                    prospective_auc
+                )
+            except Exception as e:
+                logger.warning("Prospective ROC-AUC failed: %s", e)
+
+        return {
+            "temporal_split": {
+                "established_era": "pre-2010",
+                "recent_era": "2010+",
+                "n_established_cases": len(established_cases),
+                "n_recent_cases": len(recent_cases),
+            },
+            "metrics": metrics,
+        }
+
+    # ==================================================================
+    # Benchmark Baselines
+    # ==================================================================
+
+    async def run_benchmark_baselines(
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Compare full scoring model against simple baselines.
+
+        Baselines:
+        1. Random: AUC = 0.5 (theoretical)
+        2. Single-dimension: each dimension alone as predictor
+        3. Majority class: always predict the majority label
+
+        Demonstrates that the multi-dimensional scoring adds value
+        beyond any single signal.
+
+        Returns:
+            dict with baseline AUCs and comparison to full model
+        """
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
+        positive_pairs = {
+            (c["drug_id"], c["cancer_type_id"])
+            for c in ground_truth["matched_cases"]
+        }
+
+        if not positive_pairs:
+            return {"error": "No ground truth cases matched"}
+
+        result = await db.execute(select(Hypothesis))
+        all_hypotheses = result.scalars().all()
+
+        if len(all_hypotheses) < 10:
+            return {"error": "Too few hypotheses for benchmarking"}
+
+        labels = np.array([
+            1 if (h.drug_id, h.cancer_type_id) in positive_pairs else 0
+            for h in all_hypotheses
+        ])
+        n_positive = int(labels.sum())
+        n_total = len(labels)
+
+        if n_positive == 0 or n_positive == n_total:
+            return {"error": "Need both positive and negative cases"}
+
+        # Full model AUC
+        full_scores = np.array([
+            float(h.composite_score) if h.composite_score is not None else 0.0
+            for h in all_hypotheses
+        ])
+        full_auc = float(roc_auc_score(labels, full_scores))
+
+        baselines = {
+            "random": {
+                "auc": 0.5,
+                "description": "Random prediction (theoretical baseline)",
+            },
+            "majority_class": {
+                "auc": 0.5,
+                "description": "Always predict majority class",
+            },
+        }
+
+        # Single-dimension baselines
+        dim_score_attrs = {
+            "pathway_overlap": "pathway_overlap_score",
+            "expression_correlation": "expression_correlation_score",
+            "literature_support": "literature_support_score",
+            "clinical_evidence": "clinical_evidence_score",
+            "safety": "safety_score",
+            "novelty": "novelty_score",
+            "causal_dependency": "causal_dependency_score",
+            "gnn_link": "gnn_link_score",
+            "mutation_context": "mutation_context_score",
+            "polypharmacology": "polypharmacology_score",
+        }
+
+        single_dim_results = {}
+        for dim, attr in dim_score_attrs.items():
+            dim_scores = np.array([
+                float(getattr(h, attr, 0) or 0)
+                for h in all_hypotheses
+            ])
+            # Skip if all scores are identical (no discrimination possible)
+            if dim_scores.std() < 1e-6:
+                single_dim_results[dim] = {
+                    "auc": 0.5,
+                    "description": f"All scores identical ({dim})",
+                }
+                continue
+            try:
+                dim_auc = float(roc_auc_score(labels, dim_scores))
+                single_dim_results[dim] = {
+                    "auc": round(dim_auc, 4),
+                    "description": f"{dim} dimension alone",
+                    "lift_vs_random": round(dim_auc - 0.5, 4),
+                }
+            except Exception:
+                single_dim_results[dim] = {
+                    "auc": 0.5,
+                    "description": f"Failed to compute ({dim})",
+                }
+
+        baselines["single_dimensions"] = single_dim_results
+
+        # Best single dimension
+        best_dim = max(
+            single_dim_results.items(),
+            key=lambda x: x[1]["auc"],
+        )
+
+        return {
+            "full_model": {
+                "auc": round(full_auc, 4),
+                "interpretation": _interpret_auc(full_auc),
+            },
+            "baselines": baselines,
+            "comparison": {
+                "full_vs_random": round(full_auc - 0.5, 4),
+                "full_vs_best_single_dim": round(
+                    full_auc - best_dim[1]["auc"], 4
+                ),
+                "best_single_dimension": best_dim[0],
+                "best_single_dim_auc": best_dim[1]["auc"],
+                "multi_dim_adds_value": full_auc > best_dim[1]["auc"],
+            },
+            "n_hypotheses": n_total,
+            "n_positive": n_positive,
+        }
+
+    # ==================================================================
+    # Sensitivity Analysis
+    # ==================================================================
+
+    async def run_sensitivity_analysis(
+        self,
+        db: AsyncSession,
+        n_perturbations: int = 200,
+        perturbation_scale: float = 0.1,
+        seed: int = 42,
+        ground_truth: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Assess robustness of validation metrics to weight perturbations.
+
+        Randomly perturbs scoring weights and measures how much the
+        ROC-AUC varies. A robust model should show low variance.
+
+        Args:
+            n_perturbations: Number of random weight perturbations to test
+            perturbation_scale: Standard deviation of Gaussian noise added
+                to each weight (as fraction of weight value)
+            seed: Random seed for reproducibility
+            ground_truth: Pre-built ground truth dict (avoids redundant DB queries)
+
+        Returns:
+            dict with AUC distribution under perturbation, robustness metrics
+        """
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
+        positive_pairs = {
+            (c["drug_id"], c["cancer_type_id"])
+            for c in ground_truth["matched_cases"]
+        }
+
+        if not positive_pairs:
+            return {"error": "No ground truth cases matched"}
+
+        result = await db.execute(select(Hypothesis))
+        all_hypotheses = result.scalars().all()
+
+        if len(all_hypotheses) < 10:
+            return {"error": "Too few hypotheses for sensitivity analysis"}
+
+        labels = np.array([
+            1 if (h.drug_id, h.cancer_type_id) in positive_pairs else 0
+            for h in all_hypotheses
+        ])
+        n_positive = int(labels.sum())
+        if n_positive == 0 or n_positive == len(labels):
+            return {"error": "Need both positive and negative cases"}
+
+        weights = await self.config.get_active_weights(db)
+
+        # Extract dimension scores for all hypotheses
+        dim_score_matrix = {}
+        for dim in DIMENSIONS:
+            attr = f"{dim}_score"
+            dim_score_matrix[dim] = np.array([
+                float(getattr(h, attr, 0) or 0)
+                for h in all_hypotheses
+            ])
+
+        # Baseline AUC
+        baseline_scores = np.array([
+            float(h.composite_score) if h.composite_score is not None else 0.0
+            for h in all_hypotheses
+        ])
+        baseline_auc = float(roc_auc_score(labels, baseline_scores))
+
+        rng = np.random.default_rng(seed)
+        perturbed_aucs = []
+
+        for _ in range(n_perturbations):
+            # Perturb weights with Gaussian noise
+            perturbed = {}
+            for dim in DIMENSIONS:
+                w = weights[dim]
+                noise = rng.normal(0, perturbation_scale * max(w, 0.01))
+                perturbed[dim] = max(w + noise, 0.0)
+
+            # Renormalize to sum to 1
+            total = sum(perturbed.values())
+            if total <= 0:
+                continue
+
+            for dim in perturbed:
+                perturbed[dim] /= total
+
+            # Compute scores with perturbed weights
+            perturbed_scores = np.zeros(len(all_hypotheses))
+            for dim in DIMENSIONS:
+                perturbed_scores += perturbed[dim] * dim_score_matrix[dim]
+            perturbed_scores = np.clip(perturbed_scores, 0, 100)
+
+            # Skip if all scores are identical (causes sklearn ValueError)
+            if perturbed_scores.std() < 1e-10:
+                continue
+
+            try:
+                p_auc = float(roc_auc_score(labels, perturbed_scores))
+                perturbed_aucs.append(p_auc)
+            except Exception:
+                continue
+
+        if not perturbed_aucs:
+            return {"error": "All perturbations failed"}
+
+        aucs = np.array(perturbed_aucs)
+
+        return {
+            "baseline_auc": round(baseline_auc, 4),
+            "perturbation_config": {
+                "n_perturbations": n_perturbations,
+                "perturbation_scale": perturbation_scale,
+                "seed": seed,
+            },
+            "auc_distribution": {
+                "mean": round(float(aucs.mean()), 4),
+                "std": round(float(aucs.std()), 4),
+                "min": round(float(aucs.min()), 4),
+                "max": round(float(aucs.max()), 4),
+                "median": round(float(np.median(aucs)), 4),
+                "percentile_5": round(float(np.percentile(aucs, 5)), 4),
+                "percentile_95": round(float(np.percentile(aucs, 95)), 4),
+            },
+            "robustness": {
+                "cv": round(float(aucs.std() / aucs.mean()), 4) if aucs.mean() > 0 else None,
+                "max_degradation": round(float(baseline_auc - aucs.min()), 4),
+                "pct_above_07": round(
+                    float(np.sum(aucs >= 0.7) / len(aucs) * 100), 1
+                ),
+                "pct_above_06": round(
+                    float(np.sum(aucs >= 0.6) / len(aucs) * 100), 1
+                ),
+                "interpretation": _interpret_robustness(
+                    baseline_auc, float(aucs.std()), float(aucs.min())
+                ),
+            },
+            "n_successful_perturbations": len(perturbed_aucs),
+        }
+
 
 # ===================================================================
 # Helpers
@@ -970,3 +1806,30 @@ def _generate_weight_recommendation(
         )
 
     return " ".join(parts)
+
+
+def _interpret_effect_size(d: float) -> str:
+    """Interpret Cohen's d effect size."""
+    d_abs = abs(d)
+    if d_abs >= 1.2:
+        return "very large effect"
+    if d_abs >= 0.8:
+        return "large effect"
+    if d_abs >= 0.5:
+        return "medium effect"
+    if d_abs >= 0.2:
+        return "small effect"
+    return "negligible effect"
+
+
+def _interpret_robustness(
+    baseline_auc: float, auc_std: float, auc_min: float
+) -> str:
+    """Interpret sensitivity analysis robustness."""
+    if auc_std < 0.02 and auc_min >= 0.65:
+        return "highly robust — results stable under weight perturbation"
+    if auc_std < 0.05 and auc_min >= 0.55:
+        return "moderately robust — some sensitivity to weight changes"
+    if auc_std < 0.10:
+        return "somewhat fragile — consider validating weight selection"
+    return "fragile — results highly sensitive to weight choices"

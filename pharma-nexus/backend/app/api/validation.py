@@ -6,6 +6,11 @@ Endpoints:
   - GET  /calibration            Assess score calibration (predicted vs observed probability)
   - GET  /null-distribution      Generate null distribution and per-hypothesis p-values
   - GET  /ground-truth           View known repurposing cases matched to database
+  - GET  /negative-controls      View known drug repurposing failures matched to database
+  - GET  /positive-negative      Validate using curated positive AND negative controls
+  - GET  /temporal               Temporal cross-validation (train pre-2010, test 2010+)
+  - GET  /benchmarks             Compare full model against baseline predictors
+  - GET  /sensitivity            Assess robustness to scoring weight perturbations
   - GET  /summary                Full validation summary with all metrics
 """
 
@@ -49,7 +54,7 @@ async def run_retrospective_validation(db: AsyncSession = Depends(get_db)):
 async def run_ablation_study(db: AsyncSession = Depends(get_db)):
     """Run leave-one-dimension-out ablation study.
 
-    For each of the 6 scoring dimensions, measures the impact on ROC-AUC
+    For each of the 10 scoring dimensions, measures the impact on ROC-AUC
     when that dimension is removed. Answers: "Which dimensions actually
     contribute to predictive performance?"
 
@@ -94,26 +99,109 @@ async def get_null_distribution(
     )
 
 
+@router.get("/negative-controls")
+async def get_negative_controls(db: AsyncSession = Depends(get_db)):
+    """View known drug repurposing failures matched to our database.
+
+    These are curated from terminated Phase 2/3 clinical trials and
+    withdrawn indications. Serves as explicit negative controls for
+    validation — the system should score these lower than known successes.
+    """
+    framework = ValidationFramework()
+    return await framework.build_negative_controls(db)
+
+
+@router.get("/positive-negative")
+async def run_positive_negative_validation(db: AsyncSession = Depends(get_db)):
+    """Validate using both curated positive and negative controls.
+
+    Unlike /retrospective which treats all non-positive as negative,
+    this uses explicitly curated failure cases for cleaner discrimination
+    metrics including Cohen's d effect size.
+    """
+    framework = ValidationFramework()
+    return await framework.run_positive_negative_validation(db)
+
+
+@router.get("/temporal")
+async def run_temporal_validation(db: AsyncSession = Depends(get_db)):
+    """Temporal cross-validation: train on pre-2010, test on 2010+ approvals.
+
+    Simulates prospective prediction: "Would our system have predicted
+    recent drug approvals using only knowledge of older ones?"
+    """
+    framework = ValidationFramework()
+    return await framework.run_temporal_validation(db)
+
+
+@router.get("/benchmarks")
+async def run_benchmark_baselines(db: AsyncSession = Depends(get_db)):
+    """Compare full multi-dimensional model against baseline predictors.
+
+    Tests: random baseline, single-dimension predictors (each dimension
+    alone), and majority-class baseline. Demonstrates that multi-dimensional
+    scoring adds value beyond any single signal.
+    """
+    framework = ValidationFramework()
+    return await framework.run_benchmark_baselines(db)
+
+
+@router.get("/sensitivity")
+async def run_sensitivity_analysis(
+    n_perturbations: int = Query(200, ge=50, le=2000),
+    perturbation_scale: float = Query(0.1, ge=0.01, le=0.5),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assess robustness of scoring results to weight perturbations.
+
+    Randomly perturbs dimension weights and measures ROC-AUC variance.
+    A robust model shows low AUC variance, meaning results don't depend
+    heavily on exact weight choices.
+    """
+    framework = ValidationFramework()
+    return await framework.run_sensitivity_analysis(
+        db,
+        n_perturbations=n_perturbations,
+        perturbation_scale=perturbation_scale,
+    )
+
+
 @router.get("/summary")
 async def get_validation_summary(db: AsyncSession = Depends(get_db)):
     """Comprehensive validation summary combining all analyses.
 
     This is the endpoint you show to reviewers. It combines:
-      - Ground truth coverage
+      - Ground truth coverage (positive and negative controls)
       - Retrospective validation metrics (ROC-AUC, PR-AUC, rank recovery)
+      - Positive vs negative control discrimination
+      - Temporal cross-validation (prospective simulation)
+      - Benchmark baselines (model vs single dimensions)
       - Ablation study results (dimension importance)
       - Calibration assessment
+      - Sensitivity analysis (weight robustness)
       - Statistical interpretation
     """
     framework = ValidationFramework()
 
     results = {}
 
-    # Run all analyses
-    results["ground_truth"] = await framework.build_ground_truth(db)
-    results["retrospective"] = await framework.run_retrospective_validation(db)
-    results["ablation"] = await framework.run_ablation_study(db)
-    results["calibration"] = await framework.run_calibration_analysis(db)
+    # Build ground truth and negative controls once, pass to sub-analyses
+    # to avoid redundant DB queries (~262 queries per build_ground_truth call)
+    gt = await framework.build_ground_truth(db)
+    nc = await framework.build_negative_controls(db)
+    results["ground_truth"] = gt
+    results["negative_controls"] = nc
+
+    # Run all analyses, passing pre-built ground truth where applicable
+    results["retrospective"] = await framework.run_retrospective_validation(db, ground_truth=gt)
+    results["positive_negative"] = await framework.run_positive_negative_validation(
+        db, ground_truth=gt, negative_controls=nc
+    )
+    results["temporal"] = await framework.run_temporal_validation(db)
+    results["benchmarks"] = await framework.run_benchmark_baselines(db, ground_truth=gt)
+    results["ablation"] = await framework.run_ablation_study(db, ground_truth=gt)
+    results["calibration"] = await framework.run_calibration_analysis(db, ground_truth=gt)
+    results["sensitivity"] = await framework.run_sensitivity_analysis(db, ground_truth=gt)
 
     # Generate overall assessment
     retro = results["retrospective"]
@@ -144,6 +232,48 @@ async def get_validation_summary(db: AsyncSession = Depends(get_db)):
                 f"Most important dimension: {top_dim['dimension']} "
                 f"(removing it drops AUC by {top_dim['auc_drop']:.4f})."
             )
+
+    # Positive vs negative control assessment
+    pos_neg = results.get("positive_negative", {})
+    pos_neg_metrics = pos_neg.get("metrics", {})
+    pos_neg_auc = pos_neg_metrics.get("roc_auc", 0)
+    if pos_neg_auc > 0:
+        assessment.append(
+            f"Positive vs negative control AUC: {pos_neg_auc:.3f}."
+        )
+        cohens_d = pos_neg_metrics.get("cohens_d")
+        if cohens_d is not None:
+            assessment.append(
+                f"Score separation effect size (Cohen's d): {cohens_d:.2f} "
+                f"({pos_neg_metrics.get('effect_size_interpretation', '')})."
+            )
+
+    # Temporal validation assessment
+    temporal = results.get("temporal", {})
+    temporal_metrics = temporal.get("metrics", {})
+    prospective_auc = temporal_metrics.get("prospective_roc_auc", 0)
+    if prospective_auc > 0:
+        assessment.append(
+            f"Prospective temporal AUC: {prospective_auc:.3f} — "
+            f"{'system would have predicted recent approvals' if prospective_auc >= 0.65 else 'limited prospective power'}."
+        )
+
+    # Benchmark comparison
+    benchmarks = results.get("benchmarks", {})
+    comparison = benchmarks.get("comparison", {})
+    if comparison.get("multi_dim_adds_value"):
+        assessment.append(
+            f"Multi-dimensional model outperforms best single dimension "
+            f"({comparison.get('best_single_dimension', '?')}) by "
+            f"{comparison.get('full_vs_best_single_dim', 0):.3f} AUC."
+        )
+
+    # Sensitivity assessment
+    sensitivity = results.get("sensitivity", {})
+    robustness = sensitivity.get("robustness", {})
+    robustness_interp = robustness.get("interpretation", "")
+    if robustness_interp:
+        assessment.append(f"Weight robustness: {robustness_interp}.")
 
     results["overall_assessment"] = " ".join(assessment) if assessment else "Insufficient data for assessment."
 
