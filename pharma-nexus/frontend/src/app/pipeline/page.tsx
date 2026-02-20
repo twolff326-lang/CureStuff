@@ -82,6 +82,7 @@ export default function PipelinePage() {
   /* -- active run -------------------------------------------------- */
   const [activeRun, setActiveRun] = useState<PipelineRunStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
 
   /* -- history ----------------------------------------------------- */
   const [history, setHistory] = useState<PipelineRunSummary[]>([]);
@@ -114,8 +115,10 @@ export default function PipelinePage() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     loadHistory();
     return () => {
+      mountedRef.current = false;
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [loadHistory]);
@@ -129,6 +132,7 @@ export default function PipelinePage() {
         const data = await fetchApi<PipelineRunStatus>(
           `/api/pipeline/status/${runId}`
         );
+        if (!mountedRef.current) return;
         setActiveRun(data);
         if (data.status !== "running") {
           if (pollRef.current) clearInterval(pollRef.current);

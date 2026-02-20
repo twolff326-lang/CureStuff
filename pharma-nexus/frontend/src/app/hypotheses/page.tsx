@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchApi } from "@/lib/api";
 import type { Hypothesis, CancerType, DimensionScores } from "@/types";
@@ -19,6 +20,7 @@ const SORT_OPTIONS = [
 ];
 
 export default function HypothesesPage() {
+  const router = useRouter();
   const [hypotheses, setHypotheses] = useState<Hypothesis[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -212,9 +214,7 @@ export default function HypothesesPage() {
                 <tr
                   key={h.id}
                   className="hover:bg-slate-50 transition-colors cursor-pointer"
-                  onClick={() =>
-                    (window.location.href = `/hypotheses/${h.id}`)
-                  }
+                  onClick={() => router.push(`/hypotheses/${h.id}`)}
                 >
                   {/* Score badge */}
                   <td className="px-4 py-3">

@@ -375,12 +375,12 @@ class BaseConnector(ABC):
             Summary dict with records_processed, errors count, status.
         """
         owns_session = self._external_session is None
-        session = self._external_session or async_session_factory()
+        if owns_session:
+            session = async_session_factory()
+        else:
+            session = self._external_session
 
         try:
-            if owns_session:
-                # For owned sessions, we manage the context manually
-                session = async_session_factory()
 
             self._log_id = await self._create_log(session, task_type)
             await session.commit()

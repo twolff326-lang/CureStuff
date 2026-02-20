@@ -1110,14 +1110,11 @@ class ExpressionAnalyzer:
             text("""
                 SELECT p.id, p.name, p.source
                 FROM pathways p
-                WHERE p.genes @> :gene_a_arr::jsonb
-                  AND p.genes @> :gene_b_arr::jsonb
+                WHERE p.genes @> jsonb_build_array(:gene_a)
+                  AND p.genes @> jsonb_build_array(:gene_b)
                 LIMIT 10
             """),
-            {
-                "gene_a_arr": f'["{gene_a}"]',
-                "gene_b_arr": f'["{gene_b}"]',
-            },
+            {"gene_a": gene_a, "gene_b": gene_b},
         )
         return [
             {"id": row[0], "name": row[1], "source": row[2]}
