@@ -28,6 +28,9 @@ VALID_SOURCES = {
     "hypotheses_cancer", "hypotheses_drug", "hypotheses_all", "rescore_hypotheses",
     "combinations_cancer", "combinations_all",
     "llm_narratives", "llm_full_analysis", "llm_comparative", "llm_single_analysis",
+    # GNN and monitoring
+    "gnn_export", "gnn_train", "gnn_cache", "gnn_pipeline",
+    "literature_check", "auto_monitor",
 }
 
 
@@ -96,6 +99,13 @@ async def start_ingestion(request: IngestionRequest):
         "llm_full_analysis": "app.tasks.analyze.generate_full_analysis_batch",
         "llm_comparative": "app.tasks.analyze.generate_comparative_analyses",
         "llm_single_analysis": "app.tasks.analyze.generate_single_analysis",
+        # GNN and monitoring
+        "gnn_export": "app.tasks.gnn.export_graph",
+        "gnn_train": "app.tasks.gnn.train_gnn",
+        "gnn_cache": "app.tasks.gnn.cache_predictions",
+        "gnn_pipeline": "app.tasks.gnn.full_gnn_pipeline",
+        "literature_check": "app.tasks.monitor.check_literature",
+        "auto_monitor": "app.tasks.monitor.auto_monitor_top",
     }
 
     task_name = task_map[source]

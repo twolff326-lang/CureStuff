@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import settings
 
@@ -21,6 +22,21 @@ celery_app.conf.update(
         "app.tasks.ingest.*": {"queue": "ingestion"},
         "app.tasks.analyze.*": {"queue": "analysis"},
         "app.tasks.generate.*": {"queue": "generation"},
+        "app.tasks.gnn.*": {"queue": "analysis"},
+        "app.tasks.monitor.*": {"queue": "ingestion"},
+    },
+    # Celery Beat schedule for automated tasks
+    beat_schedule={
+        "literature-monitor-weekly": {
+            "task": "app.tasks.monitor.check_literature",
+            "schedule": crontab(hour=3, minute=0, day_of_week="monday"),
+            "kwargs": {"days_back": 7, "max_hypotheses": 200},
+        },
+        "auto-monitor-top-hypotheses-daily": {
+            "task": "app.tasks.monitor.auto_monitor_top",
+            "schedule": crontab(hour=4, minute=0),
+            "kwargs": {"min_score": 30.0, "limit": 200},
+        },
     },
 )
 
