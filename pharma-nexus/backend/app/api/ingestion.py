@@ -1,10 +1,13 @@
 import logging
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query
+from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.ingestion_log import IngestionLog
 from app.tasks.celery_app import celery_app
@@ -513,3 +516,126 @@ async def cancel_task(task_id: str):
         "previous_state": task_state,
         "action": "revoked",
     }
+
+
+# ------------------------------------------------------------------
+# Kill switch — full data reset
+# ------------------------------------------------------------------
+
+# Ordered so that child/junction tables are truncated before parents.
+_ALL_TABLES = [
+    "tallula_discoveries",
+    "tallula_runs",
+    "validation_results",
+    "hypothesis_evidence",
+    "hypothesis_analyses",
+    "llm_usage_logs",
+    "combination_hypotheses",
+    "gene_dependencies",
+    "expression_score_cache",
+    "gene_expression",
+    "bioassays",
+    "trial_drugs",
+    "clinical_trials",
+    "literature_drugs",
+    "literature_targets",
+    "literature_cancers",
+    "literature",
+    "drug_targets",
+    "pathway_targets",
+    "protein_interactions",
+    "target_disease_associations",
+    "pathways",
+    "mutations",
+    "cancer_molecular_profiles",
+    "hypotheses",
+    "cancer_types",
+    "targets",
+    "drugs",
+    "scoring_weights",
+    "ingestion_logs",
+]
+
+
+@router.post("/reset-all")
+async def reset_all_data(db: AsyncSession = Depends(get_db)):
+    """Kill switch: cancel every running task, then wipe PostgreSQL,
+    Redis, and Neo4j so the app is back to a clean-slate state.
+
+    Returns a summary of what was cleared in each subsystem.
+    """
+    report: dict[str, object] = {}
+
+    # 1. Cancel all active/reserved Celery tasks and purge queues ----
+    try:
+        inspect = celery_app.control.inspect()
+        active = inspect.active() or {}
+        reserved = inspect.reserved() or {}
+        revoked_ids: list[str] = []
+        for worker_tasks in [*active.values(), *reserved.values()]:
+            for task_info in worker_tasks:
+                tid = task_info.get("id")
+                if tid:
+                    celery_app.control.revoke(tid, terminate=True, signal="SIGTERM")
+                    revoked_ids.append(tid)
+        celery_app.control.purge()
+        report["celery"] = {
+            "tasks_revoked": len(revoked_ids),
+            "queues_purged": True,
+        }
+    except Exception as exc:
+        logger.warning("Celery reset partial failure: %s", exc)
+        report["celery"] = {"error": str(exc)}
+
+    # 2. Truncate all PostgreSQL tables --------------------------------
+    try:
+        table_list = ", ".join(_ALL_TABLES)
+        result = await db.execute(
+            text(f"TRUNCATE TABLE {table_list} CASCADE")
+        )
+        await db.commit()
+        report["postgres"] = {
+            "tables_truncated": _ALL_TABLES,
+            "count": len(_ALL_TABLES),
+        }
+    except Exception as exc:
+        await db.rollback()
+        logger.error("PostgreSQL truncate failed: %s", exc)
+        report["postgres"] = {"error": str(exc)}
+
+    # 3. Flush Redis (all 3 logical databases) -------------------------
+    redis_dbs_flushed: list[int] = []
+    for db_index in (0, 1, 2):
+        try:
+            r = aioredis.from_url(
+                f"redis://{settings.redis_url.split('@')[-1].split('/')[0]}/{db_index}"
+                if "@" in settings.redis_url
+                else settings.redis_url.rsplit("/", 1)[0] + f"/{db_index}",
+            )
+            await r.flushdb()
+            await r.aclose()
+            redis_dbs_flushed.append(db_index)
+        except Exception as exc:
+            logger.warning("Redis flush db/%d failed: %s", db_index, exc)
+    report["redis"] = {"databases_flushed": redis_dbs_flushed}
+
+    # 4. Clear Neo4j knowledge graph -----------------------------------
+    try:
+        driver = AsyncGraphDatabase.driver(
+            settings.neo4j_uri,
+            auth=(settings.neo4j_user, settings.neo4j_password),
+        )
+        async with driver.session() as neo_session:
+            result = await neo_session.run(
+                "MATCH (n) DETACH DELETE n RETURN count(n) AS deleted"
+            )
+            record = await result.single()
+            neo4j_deleted = record["deleted"] if record else 0
+        await driver.close()
+        report["neo4j"] = {"nodes_deleted": neo4j_deleted}
+    except Exception as exc:
+        logger.warning("Neo4j clear failed: %s", exc)
+        report["neo4j"] = {"error": str(exc)}
+
+    logger.info("Kill switch activated — full reset complete: %s", report)
+    return {"status": "reset_complete", "details": report}
