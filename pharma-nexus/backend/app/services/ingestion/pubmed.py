@@ -170,6 +170,8 @@ class PubMedConnector(BaseConnector):
         pairs = result.all()
         logger.info("Phase 1: found %d drug-cancer pairs with pathway connections", len(pairs))
 
+        await self.set_total_expected(session, len(pairs))
+
         processed = 0
         for drug_id, drug_name, cancer_type_id, cancer_name, tissue in pairs:
             try:
@@ -218,6 +220,10 @@ class PubMedConnector(BaseConnector):
         )
         drugs = result.all()
         logger.info("Phase 2: searching %d drugs for cancer literature", len(drugs))
+
+        await self.set_total_expected(
+            session, self._records_processed + len(drugs),
+        )
 
         processed = 0
         for drug_id, drug_name in drugs:
@@ -275,6 +281,10 @@ class PubMedConnector(BaseConnector):
         )
         targets = result.all()
         logger.info("Phase 3: searching %d targets for cancer literature", len(targets))
+
+        await self.set_total_expected(
+            session, self._records_processed + len(targets),
+        )
 
         processed = 0
         for target_id, gene_symbol, gene_name in targets:

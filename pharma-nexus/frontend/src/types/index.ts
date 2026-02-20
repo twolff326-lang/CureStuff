@@ -81,6 +81,7 @@ export interface IngestionLog {
   task_type: string;
   status: string;
   records_processed: number;
+  total_expected: number | null;
   errors?: unknown[] | null;
   started_at: string;
   completed_at: string | null;

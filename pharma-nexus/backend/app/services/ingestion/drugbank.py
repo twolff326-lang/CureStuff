@@ -435,6 +435,8 @@ class DrugBankConnector(BaseConnector):
         owns_client = self._external_client is None
         drug_records: list[dict[str, Any]] = []
 
+        await self.set_total_expected(session, len(FALLBACK_DRUGS))
+
         try:
             for drug_name in FALLBACK_DRUGS:
                 try:

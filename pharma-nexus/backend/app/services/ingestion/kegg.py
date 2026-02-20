@@ -193,6 +193,8 @@ class KEGGConnector(BaseConnector):
             pathway_list = await self._list_human_pathways(client)
             logger.info("Found %d human pathways in KEGG", len(pathway_list))
 
+            await self.set_total_expected(session, len(pathway_list))
+
             processed = 0
 
             # Phase 2: Fetch detail for each pathway

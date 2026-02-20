@@ -158,6 +158,8 @@ class ClinicalTrialsConnector(BaseConnector):
                 "Fetching clinical trials for %d drugs", len(drugs)
             )
 
+            await self.set_total_expected(session, len(drugs))
+
             processed = 0
             for drug_id, drug_name in drugs:
                 try:

@@ -93,6 +93,8 @@ class UniProtConnector(BaseConnector):
             targets = result.all()
             logger.info("Enriching %d targets with UniProt data", len(targets))
 
+            await self.set_total_expected(session, len(targets))
+
             processed = 0
             uniprot_ids = [t[1] for t in targets]
 

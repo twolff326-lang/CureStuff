@@ -99,6 +99,8 @@ class PubChemConnector(BaseConnector):
             logger.info("No existing drugs to enrich from PubChem")
             return 0
 
+        await self.set_total_expected(session, len(drugs))
+
         enrichment_records: list[dict[str, Any]] = []
         for drug_id, drug_name, drugbank_id, existing_smiles in drugs:
             try:
@@ -182,6 +184,11 @@ class PubChemConnector(BaseConnector):
         if not targets:
             logger.info("No targets found for bioassay lookup")
             return 0
+
+        # Update total: current progress + targets to process
+        await self.set_total_expected(
+            session, self._records_processed + len(targets),
+        )
 
         total_bioassays = 0
         # Build a mapping of drug name/CID -> drug_id for linking

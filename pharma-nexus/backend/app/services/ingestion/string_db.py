@@ -83,6 +83,8 @@ class STRINGConnector(BaseConnector):
                 "Fetching STRING interactions for %d targets", len(gene_symbols)
             )
 
+            await self.set_total_expected(session, len(gene_symbols))
+
             # Batch query STRING
             all_interactions: list[dict[str, Any]] = []
             for i in range(0, len(gene_symbols), STRING_BATCH_SIZE):
