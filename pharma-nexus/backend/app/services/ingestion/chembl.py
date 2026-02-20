@@ -125,6 +125,12 @@ class ChEMBLConnector(BaseConnector):
 
             page_meta = data.get("page_meta", {})
 
+            # Set total_expected from first page metadata
+            if offset == 0:
+                api_total = page_meta.get("total_count")
+                if api_total:
+                    await self.set_total_expected(session, api_total)
+
             for mech in mechanisms:
                 try:
                     molecule_chembl_id = mech.get("molecule_chembl_id")
@@ -231,6 +237,11 @@ class ChEMBLConnector(BaseConnector):
         if not drugs:
             logger.info("No drugs to fetch affinities for")
             return 0
+
+        # Update total_expected: current progress + number of drugs to enrich
+        await self.set_total_expected(
+            session, self._records_processed + len(drugs),
+        )
 
         total_activities = 0
 

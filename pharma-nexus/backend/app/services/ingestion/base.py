@@ -71,6 +71,7 @@ class BaseConnector(ABC):
         self._timeout = timeout
         self._errors: list[dict[str, Any]] = []
         self._records_processed: int = 0
+        self._total_expected: int | None = None
         self._log_id: int | None = None
 
     # ------------------------------------------------------------------
@@ -320,6 +321,25 @@ class BaseConnector(ABC):
         )
         await session.execute(stmt)
 
+    async def set_total_expected(self, session: AsyncSession, total: int) -> None:
+        """Set (or update) the expected total record count for this run.
+
+        Call this as soon as the total is known — e.g. after the first
+        paginated API response or after a DB query that determines the
+        work set.  May be called multiple times if the estimate is refined
+        during multi-phase ingestion.
+        """
+        self._total_expected = total
+        if self._log_id is None:
+            return
+        stmt = (
+            update(IngestionLog)
+            .where(IngestionLog.id == self._log_id)
+            .values(total_expected=total)
+        )
+        await session.execute(stmt)
+        await session.commit()
+
     async def _flush_progress(self, session: AsyncSession) -> None:
         """Flush the current records_processed count to the ingestion log.
 
@@ -328,10 +348,13 @@ class BaseConnector(ABC):
         """
         if self._log_id is None:
             return
+        values: dict[str, Any] = {"records_processed": self._records_processed}
+        if self._total_expected is not None:
+            values["total_expected"] = self._total_expected
         stmt = (
             update(IngestionLog)
             .where(IngestionLog.id == self._log_id)
-            .values(records_processed=self._records_processed)
+            .values(**values)
         )
         await session.execute(stmt)
         await session.commit()

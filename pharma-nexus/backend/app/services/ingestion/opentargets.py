@@ -135,6 +135,8 @@ class OpenTargetsConnector(BaseConnector):
                 )
                 return []
 
+            await self.set_total_expected(session, len(targets))
+
             processed = 0
             skipped = 0
 

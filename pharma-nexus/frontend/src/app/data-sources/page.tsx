@@ -72,6 +72,7 @@ interface LogEntry {
   task_type: string;
   status: string;
   records_processed: number;
+  total_expected: number | null;
   errors: unknown[] | null;
   started_at: string | null;
   completed_at: string | null;
@@ -311,6 +312,9 @@ export default function DataSourcesPage() {
                   </td>
                   <td className="px-4 py-2 text-right text-sm tabular-nums text-slate-600">
                     {log.records_processed.toLocaleString()}
+                    {log.total_expected ? (
+                      <span className="text-slate-400"> / {log.total_expected.toLocaleString()}</span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-2 text-right text-xs text-slate-400">
                     {log.started_at ? formatTimeAgo(log.started_at) : "\u2014"}

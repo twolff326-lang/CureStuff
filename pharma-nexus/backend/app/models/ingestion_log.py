@@ -21,6 +21,7 @@ class IngestionLog(Base):
     task_type = Column(String(100), nullable=False)
     status = Column(String(50), nullable=False, default="started", index=True)
     records_processed = Column(Integer, default=0)
+    total_expected = Column(Integer, nullable=True)
     errors = Column(JSONB, default=list)
     started_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime)

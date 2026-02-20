@@ -8,6 +8,7 @@ export interface SourceStatus {
   task_type: string;
   status: string; // "running" | "completed" | "failed"
   records_processed: number;
+  total_expected: number | null;
   errors: unknown[] | null;
   started_at: string | null;
   completed_at: string | null;
@@ -98,6 +99,11 @@ export default function IngestionCard({
     if (!hasStatus) setDisplayCount(0);
   }, [hasStatus]);
 
+  const totalExpected = status?.total_expected ?? null;
+  const progressPct =
+    isRunning && totalExpected && totalExpected > 0
+      ? Math.min(100, Math.round(((status?.records_processed ?? 0) / totalExpected) * 100))
+      : null;
   const errorCount = status?.errors?.length ?? 0;
 
   return (
@@ -155,9 +161,20 @@ export default function IngestionCard({
                 >
                   {formatNumber(displayCount)}
                 </span>
-                <span className="text-sm font-medium text-slate-500">
-                  records
-                </span>
+                {totalExpected ? (
+                  <span className="text-sm font-medium text-slate-500">
+                    of {formatNumber(totalExpected)}
+                  </span>
+                ) : (
+                  <span className="text-sm font-medium text-slate-500">
+                    records
+                  </span>
+                )}
+                {progressPct !== null && (
+                  <span className="text-xs tabular-nums text-blue-500">
+                    ({progressPct}%)
+                  </span>
+                )}
               </div>
               {status?.started_at && (
                 <span className="text-xs tabular-nums text-slate-400">
@@ -167,7 +184,15 @@ export default function IngestionCard({
             </div>
 
             {/* Progress bar */}
-            {isRunning && (
+            {isRunning && progressPct !== null && (
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
+                <div
+                  className="h-full rounded-full bg-blue-500 transition-all duration-700 ease-out"
+                  style={{ width: `${Math.max(2, progressPct)}%` }}
+                />
+              </div>
+            )}
+            {isRunning && progressPct === null && (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
                 <div className="h-full animate-progress-indeterminate rounded-full bg-blue-500" />
               </div>
