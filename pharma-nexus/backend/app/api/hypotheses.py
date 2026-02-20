@@ -550,11 +550,14 @@ async def get_cross_cancer_signals(
     )
     rows = result.all()
 
-    drugs = []
-    for row in rows:
-        # Get the specific cancer types and scores
-        hyp_result = await db.execute(
+    drug_ids = [row[0] for row in rows]
+
+    # Batch-fetch all cancer hits for these drugs at once (avoids N+1)
+    cancer_hits_map: dict[int, list[dict]] = {did: [] for did in drug_ids}
+    if drug_ids:
+        all_hits = await db.execute(
             select(
+                Hypothesis.drug_id,
                 Hypothesis.cancer_type_id,
                 CancerType.name,
                 CancerType.tcga_code,
@@ -563,22 +566,22 @@ async def get_cross_cancer_signals(
             )
             .join(CancerType, Hypothesis.cancer_type_id == CancerType.id)
             .where(
-                Hypothesis.drug_id == row[0],
+                Hypothesis.drug_id.in_(drug_ids),
                 Hypothesis.composite_score >= min_score,
             )
-            .order_by(Hypothesis.composite_score.desc())
+            .order_by(Hypothesis.drug_id, Hypothesis.composite_score.desc())
         )
-        cancer_hits = [
-            {
-                "cancer_type_id": h[0],
-                "cancer_name": h[1],
-                "tcga_code": h[2],
-                "composite_score": round(h[3], 1),
-                "evidence_strength": h[4],
-            }
-            for h in hyp_result.all()
-        ]
+        for h in all_hits.all():
+            cancer_hits_map[h[0]].append({
+                "cancer_type_id": h[1],
+                "cancer_name": h[2],
+                "tcga_code": h[3],
+                "composite_score": round(h[4], 1),
+                "evidence_strength": h[5],
+            })
 
+    drugs = []
+    for row in rows:
         drugs.append({
             "drug_id": row[0],
             "drug_name": row[1],
@@ -590,7 +593,7 @@ async def get_cross_cancer_signals(
             "max_score": round(row[7], 1) if row[7] else 0,
             "avg_mutation_context": round(row[8], 1) if row[8] else 0,
             "avg_polypharmacology": round(row[9], 1) if row[9] else 0,
-            "cancer_types": cancer_hits,
+            "cancer_types": cancer_hits_map.get(row[0], []),
         })
 
     return {

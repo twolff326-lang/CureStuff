@@ -37,7 +37,7 @@ async def list_drugs(
         count_query = count_query.where(Drug.status == status)
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = query.order_by(Drug.name).offset(offset).limit(per_page)
@@ -170,7 +170,7 @@ async def get_drug_bioassays(
     count_result = await db.execute(
         select(func.count(Bioassay.id)).where(Bioassay.drug_id == drug_id)
     )
-    total = count_result.scalar()
+    total = count_result.scalar() or 0
 
     offset = (page - 1) * per_page
     result = await db.execute(

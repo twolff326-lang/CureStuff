@@ -237,7 +237,7 @@ class OpenTargetsConnector(BaseConnector):
         records = []
 
         for assoc in associations:
-            disease = assoc.get("disease", {})
+            disease = assoc.get("disease") or {}
             disease_id = disease.get("id", "")
             disease_name = disease.get("name", "")
 

@@ -50,39 +50,47 @@ async def list_cancer_types(
         count_query = count_query.where(CancerType.tissue.ilike(f"%{tissue}%"))
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = query.order_by(CancerType.name).offset(offset).limit(per_page)
     result = await db.execute(query)
     cancer_types = result.scalars().all()
 
-    # Gather summary stats per cancer type
-    items = []
-    for ct in cancer_types:
-        # Count mutations
-        mut_count_result = await db.execute(
-            select(func.count(Mutation.id)).where(Mutation.cancer_type_id == ct.id)
-        )
-        mutation_count = mut_count_result.scalar()
+    # Batch-fetch summary stats for all cancer types on this page (avoids N+1)
+    ct_ids = [ct.id for ct in cancer_types]
 
-        # Count molecular profiles
-        profile_count_result = await db.execute(
-            select(func.count(CancerMolecularProfile.id)).where(
-                CancerMolecularProfile.cancer_type_id == ct.id
-            )
-        )
-        profile_count = profile_count_result.scalar()
+    mut_map: dict[int, int] = {}
+    profile_map: dict[int, int] = {}
+    driver_map: dict[int, int] = {}
 
-        # Count driver genes
-        driver_count_result = await db.execute(
-            select(func.count(CancerMolecularProfile.id)).where(
-                CancerMolecularProfile.cancer_type_id == ct.id,
+    if ct_ids:
+        mut_result = await db.execute(
+            select(Mutation.cancer_type_id, func.count(Mutation.id))
+            .where(Mutation.cancer_type_id.in_(ct_ids))
+            .group_by(Mutation.cancer_type_id)
+        )
+        mut_map = {row[0]: row[1] for row in mut_result.all()}
+
+        profile_result = await db.execute(
+            select(CancerMolecularProfile.cancer_type_id, func.count(CancerMolecularProfile.id))
+            .where(CancerMolecularProfile.cancer_type_id.in_(ct_ids))
+            .group_by(CancerMolecularProfile.cancer_type_id)
+        )
+        profile_map = {row[0]: row[1] for row in profile_result.all()}
+
+        driver_result = await db.execute(
+            select(CancerMolecularProfile.cancer_type_id, func.count(CancerMolecularProfile.id))
+            .where(
+                CancerMolecularProfile.cancer_type_id.in_(ct_ids),
                 CancerMolecularProfile.alteration_type == "driver_mutation",
             )
+            .group_by(CancerMolecularProfile.cancer_type_id)
         )
-        driver_count = driver_count_result.scalar()
+        driver_map = {row[0]: row[1] for row in driver_result.all()}
 
+    items = []
+    for ct in cancer_types:
         items.append({
             "id": ct.id,
             "tcga_code": ct.tcga_code,
@@ -91,9 +99,9 @@ async def list_cancer_types(
             "organ": ct.organ,
             "subtype": ct.subtype,
             "sample_count": ct.sample_count,
-            "mutation_count": mutation_count,
-            "molecular_profile_count": profile_count,
-            "driver_gene_count": driver_count,
+            "mutation_count": mut_map.get(ct.id, 0),
+            "molecular_profile_count": profile_map.get(ct.id, 0),
+            "driver_gene_count": driver_map.get(ct.id, 0),
         })
 
     return {
@@ -228,7 +236,7 @@ async def get_molecular_profile(
         )
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = (
@@ -305,7 +313,7 @@ async def get_cancer_type_mutations(
         count_query = count_query.where(Mutation.frequency_percent >= min_frequency)
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = (

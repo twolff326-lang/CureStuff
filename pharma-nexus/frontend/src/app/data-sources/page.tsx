@@ -87,6 +87,7 @@ export default function DataSourcesPage() {
   const [startingSource, setStartingSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
+  const mountedRef = useRef(true);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetResult, setResetResult] = useState<string | null>(null);
@@ -97,12 +98,17 @@ export default function DataSourcesPage() {
   );
 
   // ---- Polling ------------------------------------------------
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const fetchStatus = useCallback(async () => {
     try {
       const data = await fetchApi<LiveStatusResponse>(
         "/api/ingestion/live-status",
       );
-      setStatuses(data.sources);
+      if (mountedRef.current) setStatuses(data.sources);
     } catch {
       // Silently ignore — will retry next interval
     }
@@ -113,7 +119,7 @@ export default function DataSourcesPage() {
       const data = await fetchApi<{ logs: LogEntry[] }>(
         "/api/ingestion/logs?per_page=10",
       );
-      setRecentLogs(data.logs);
+      if (mountedRef.current) setRecentLogs(data.logs);
     } catch {
       // ignore
     }

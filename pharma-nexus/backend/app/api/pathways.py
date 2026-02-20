@@ -57,7 +57,7 @@ async def list_pathways(
         count_query = count_query.where(Pathway.category.ilike(f"%{category}%"))
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = query.order_by(Pathway.name).offset(offset).limit(per_page)
@@ -192,7 +192,7 @@ async def list_targets(
         count_query = count_query.where(search_filter)
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = query.order_by(Target.gene_symbol).offset(offset).limit(per_page)
@@ -285,7 +285,7 @@ async def get_target_interactions(
     )
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = (
@@ -360,7 +360,7 @@ async def get_target_disease_associations(
         )
 
     total_result = await db.execute(count_query)
-    total = total_result.scalar()
+    total = total_result.scalar() or 0
 
     offset = (page - 1) * per_page
     query = (

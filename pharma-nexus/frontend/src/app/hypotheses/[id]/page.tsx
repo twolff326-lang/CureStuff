@@ -94,6 +94,7 @@ export default function HypothesisDetailPage() {
       setAnalyses(a.analyses);
     } catch {
       setHypothesis(null);
+      setAnalyses([]);
     } finally {
       setLoading(false);
     }

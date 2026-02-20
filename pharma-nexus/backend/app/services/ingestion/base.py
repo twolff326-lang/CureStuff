@@ -33,7 +33,6 @@ class RateLimiter:
 
     def __init__(self, requests_per_second: float):
         self._rate = requests_per_second
-        self._semaphore = asyncio.Semaphore(max(1, int(requests_per_second)))
         self._min_interval = 1.0 / requests_per_second if requests_per_second > 0 else 0
         self._last_request_time: float = 0.0
         self._lock = asyncio.Lock()

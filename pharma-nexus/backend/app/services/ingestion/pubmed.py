@@ -234,7 +234,8 @@ class PubMedConnector(BaseConnector):
                 )
 
                 pmids = await self._search_pubmed(
-                    query, retmax=100, mindate="2010", maxdate="2026"
+                    query, retmax=100, mindate="2010",
+                    maxdate=str(datetime.now().year),
                 )
                 if pmids:
                     count = await self._fetch_and_store_papers(
@@ -309,7 +310,8 @@ class PubMedConnector(BaseConnector):
                 )
 
                 pmids = await self._search_pubmed(
-                    query, retmax=50, mindate="2015", maxdate="2026"
+                    query, retmax=50, mindate="2015",
+                    maxdate=str(datetime.now().year),
                 )
                 if pmids:
                     count = await self._fetch_and_store_papers(
