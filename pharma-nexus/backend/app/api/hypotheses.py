@@ -494,6 +494,116 @@ async def list_hypotheses(
 
 
 # ------------------------------------------------------------------
+# Cross-cancer consistency
+# ------------------------------------------------------------------
+
+
+@router.get("/cross-cancer")
+async def get_cross_cancer_signals(
+    min_score: float = Query(25.0, ge=0, le=100),
+    min_cancers: int = Query(3, ge=2, le=50),
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Find drugs that score well across multiple cancer types.
+
+    This detects pan-cancer signals — drugs with repurposing potential
+    that is consistent across many cancer types, suggesting a fundamental
+    rather than cancer-specific mechanism.
+
+    Returns drugs ranked by the number of distinct cancer types where
+    they score above min_score.
+    """
+    # Subquery: drugs with count of cancers above threshold
+    subq = (
+        select(
+            Hypothesis.drug_id,
+            func.count(func.distinct(Hypothesis.cancer_type_id)).label("cancer_count"),
+            func.avg(Hypothesis.composite_score).label("avg_score"),
+            func.min(Hypothesis.composite_score).label("min_score"),
+            func.max(Hypothesis.composite_score).label("max_score"),
+            func.avg(Hypothesis.mutation_context_score).label("avg_mutation_context"),
+            func.avg(Hypothesis.polypharmacology_score).label("avg_polypharmacology"),
+        )
+        .where(Hypothesis.composite_score >= min_score)
+        .group_by(Hypothesis.drug_id)
+        .having(func.count(func.distinct(Hypothesis.cancer_type_id)) >= min_cancers)
+        .subquery()
+    )
+
+    result = await db.execute(
+        select(
+            Drug.id,
+            Drug.name,
+            Drug.drugbank_id,
+            Drug.status,
+            subq.c.cancer_count,
+            subq.c.avg_score,
+            subq.c.min_score,
+            subq.c.max_score,
+            subq.c.avg_mutation_context,
+            subq.c.avg_polypharmacology,
+        )
+        .join(subq, Drug.id == subq.c.drug_id)
+        .order_by(subq.c.cancer_count.desc(), subq.c.avg_score.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    drugs = []
+    for row in rows:
+        # Get the specific cancer types and scores
+        hyp_result = await db.execute(
+            select(
+                Hypothesis.cancer_type_id,
+                CancerType.name,
+                CancerType.tcga_code,
+                Hypothesis.composite_score,
+                Hypothesis.evidence_strength,
+            )
+            .join(CancerType, Hypothesis.cancer_type_id == CancerType.id)
+            .where(
+                Hypothesis.drug_id == row[0],
+                Hypothesis.composite_score >= min_score,
+            )
+            .order_by(Hypothesis.composite_score.desc())
+        )
+        cancer_hits = [
+            {
+                "cancer_type_id": h[0],
+                "cancer_name": h[1],
+                "tcga_code": h[2],
+                "composite_score": round(h[3], 1),
+                "evidence_strength": h[4],
+            }
+            for h in hyp_result.all()
+        ]
+
+        drugs.append({
+            "drug_id": row[0],
+            "drug_name": row[1],
+            "drugbank_id": row[2],
+            "drug_status": row[3],
+            "cancer_count": row[4],
+            "avg_score": round(row[5], 1) if row[5] else 0,
+            "min_score": round(row[6], 1) if row[6] else 0,
+            "max_score": round(row[7], 1) if row[7] else 0,
+            "avg_mutation_context": round(row[8], 1) if row[8] else 0,
+            "avg_polypharmacology": round(row[9], 1) if row[9] else 0,
+            "cancer_types": cancer_hits,
+        })
+
+    return {
+        "drugs": drugs,
+        "count": len(drugs),
+        "filters": {
+            "min_score": min_score,
+            "min_cancers": min_cancers,
+        },
+    }
+
+
+# ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
 
@@ -515,6 +625,8 @@ def _serialize_hypothesis(h: Hypothesis) -> dict:
             "safety": h.safety_score,
             "novelty": h.novelty_score,
             "causal_dependency": h.causal_dependency_score,
+            "mutation_context": h.mutation_context_score,
+            "polypharmacology": h.polypharmacology_score,
         },
         "statistical": {
             "p_value": h.p_value,

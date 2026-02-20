@@ -58,6 +58,18 @@ const DIMENSION_META: Record<
     description: "DepMap CRISPR evidence that drug targets are essential for cancer survival",
     color: "#dc2626",
   },
+  mutation_context: {
+    label: "Mutation Context",
+    description:
+      "Conditional vulnerability: drug target becomes essential due to cancer's specific mutations",
+    color: "#c026d3",
+  },
+  polypharmacology: {
+    label: "Polypharmacology",
+    description:
+      "Off-target bioassay activity against cancer-relevant proteins beyond official drug targets",
+    color: "#0891b2",
+  },
 };
 
 export default function HypothesisDetailPage() {

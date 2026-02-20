@@ -24,6 +24,8 @@ export interface DimensionScores {
   novelty: number;
   causal_dependency: number;
   gnn_link: number;
+  mutation_context: number;
+  polypharmacology: number;
 }
 
 export interface Hypothesis {

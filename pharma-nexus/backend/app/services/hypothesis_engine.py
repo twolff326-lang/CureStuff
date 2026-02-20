@@ -196,6 +196,8 @@ class HypothesisEngine:
                     "novelty": {"score": hyp.novelty_score or 0},
                     "causal_dependency": {"score": hyp.causal_dependency_score or 0},
                     "gnn_link": {"score": hyp.gnn_link_score or 0},
+                    "mutation_context": {"score": hyp.mutation_context_score or 0},
+                    "polypharmacology": {"score": hyp.polypharmacology_score or 0},
                 }
                 new_composite = self.config.compute_composite_score(
                     dimension_scores, weights
@@ -696,6 +698,8 @@ class HypothesisEngine:
             hypothesis.novelty_score = dimension_scores["novelty"]["score"]
             hypothesis.causal_dependency_score = dimension_scores["causal_dependency"]["score"]
             hypothesis.gnn_link_score = dimension_scores.get("gnn_link", {}).get("score", 0)
+            hypothesis.mutation_context_score = dimension_scores.get("mutation_context", {}).get("score", 0)
+            hypothesis.polypharmacology_score = dimension_scores.get("polypharmacology", {}).get("score", 0)
         else:
             # Create new
             hypothesis = Hypothesis(
@@ -713,6 +717,8 @@ class HypothesisEngine:
                 novelty_score=dimension_scores["novelty"]["score"],
                 causal_dependency_score=dimension_scores["causal_dependency"]["score"],
                 gnn_link_score=dimension_scores.get("gnn_link", {}).get("score", 0),
+                mutation_context_score=dimension_scores.get("mutation_context", {}).get("score", 0),
+                polypharmacology_score=dimension_scores.get("polypharmacology", {}).get("score", 0),
                 status="generated",
             )
             db.add(hypothesis)
