@@ -54,7 +54,7 @@ async def run_retrospective_validation(db: AsyncSession = Depends(get_db)):
 async def run_ablation_study(db: AsyncSession = Depends(get_db)):
     """Run leave-one-dimension-out ablation study.
 
-    For each of the 6 scoring dimensions, measures the impact on ROC-AUC
+    For each of the 10 scoring dimensions, measures the impact on ROC-AUC
     when that dimension is removed. Answers: "Which dimensions actually
     contribute to predictive performance?"
 
@@ -185,16 +185,23 @@ async def get_validation_summary(db: AsyncSession = Depends(get_db)):
 
     results = {}
 
-    # Run all analyses
-    results["ground_truth"] = await framework.build_ground_truth(db)
-    results["negative_controls"] = await framework.build_negative_controls(db)
-    results["retrospective"] = await framework.run_retrospective_validation(db)
-    results["positive_negative"] = await framework.run_positive_negative_validation(db)
+    # Build ground truth and negative controls once, pass to sub-analyses
+    # to avoid redundant DB queries (~262 queries per build_ground_truth call)
+    gt = await framework.build_ground_truth(db)
+    nc = await framework.build_negative_controls(db)
+    results["ground_truth"] = gt
+    results["negative_controls"] = nc
+
+    # Run all analyses, passing pre-built ground truth where applicable
+    results["retrospective"] = await framework.run_retrospective_validation(db, ground_truth=gt)
+    results["positive_negative"] = await framework.run_positive_negative_validation(
+        db, ground_truth=gt, negative_controls=nc
+    )
     results["temporal"] = await framework.run_temporal_validation(db)
-    results["benchmarks"] = await framework.run_benchmark_baselines(db)
-    results["ablation"] = await framework.run_ablation_study(db)
-    results["calibration"] = await framework.run_calibration_analysis(db)
-    results["sensitivity"] = await framework.run_sensitivity_analysis(db)
+    results["benchmarks"] = await framework.run_benchmark_baselines(db, ground_truth=gt)
+    results["ablation"] = await framework.run_ablation_study(db, ground_truth=gt)
+    results["calibration"] = await framework.run_calibration_analysis(db, ground_truth=gt)
+    results["sensitivity"] = await framework.run_sensitivity_analysis(db, ground_truth=gt)
 
     # Generate overall assessment
     retro = results["retrospective"]

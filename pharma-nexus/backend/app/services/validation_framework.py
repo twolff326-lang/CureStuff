@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Format: (drug_name_fragment, cancer_name_fragment, evidence_level)
 # evidence_level: "fda_approved" | "phase3_success" | "phase2_positive" | "preclinical_validated"
 #
-# 131 cases across 4 evidence tiers. Organized by:
+# 132 cases across 4 evidence tiers. Organized by:
 #   1. Non-cancer → cancer repurposing (FDA-approved)
 #   2. Cancer indication expansions (FDA-approved)
 #   3. Phase 3 successes
@@ -360,15 +360,16 @@ KNOWN_REPURPOSING_FAILURES = [
     # ===================================================================
     # PHASE 3 FAILURES: Drugs that failed Phase 3 for cancer indication
     # ===================================================================
-
-    # Bevacizumab failed to improve OS in adjuvant CRC (AVANT, NSABP C-08)
-    ("bevacizumab", "colorectal", "phase3_failed", "no OS benefit in adjuvant setting"),
+    #
+    # NOTE: Excluded pairs that also appear in KNOWN_REPURPOSING_CASES to
+    # avoid DB-level contradictions (fragment matching can't distinguish
+    # clinical settings like adjuvant vs metastatic):
+    #   - bevacizumab + colorectal (FDA-approved metastatic, failed adjuvant)
+    #   - metformin + pancreatic (Phase 2 positive early-stage, Phase 3 MAPPA failed advanced)
+    #   - sorafenib + hepatocellular (FDA-approved advanced, failed adjuvant STORM)
 
     # Celecoxib failed in APC prevention (terminated due to cardiovascular risk)
     ("celecoxib", "pancreatic", "phase3_failed", "no survival benefit, cardiovascular risk"),
-
-    # Metformin failed in advanced pancreatic cancer (Phase 3 MAPPA)
-    ("metformin", "pancreatic", "phase3_failed", "no PFS or OS benefit in advanced disease"),
 
     # Cimetidine failed Phase 3 for gastric cancer (Japanese RCT)
     ("cimetidine", "gastric", "phase3_failed", "no survival benefit"),
@@ -384,9 +385,6 @@ KNOWN_REPURPOSING_FAILURES = [
 
     # Enzastaurin (PKC-beta inhibitor) failed Phase 3 GBM
     ("enzastaurin", "glioblastoma", "phase3_failed", "no PFS benefit vs lomustine"),
-
-    # Sorafenib failed Phase 3 for hepatocellular (STORM adjuvant trial)
-    ("sorafenib", "hepatocellular", "phase3_failed", "no benefit in adjuvant setting"),
 
     # Bavituximab (anti-phosphatidylserine) failed Phase 3 NSCLC
     ("bavituximab", "lung", "phase3_failed", "no OS benefit with docetaxel"),
@@ -625,7 +623,9 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_retrospective_validation(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Full retrospective validation pipeline.
 
@@ -635,11 +635,15 @@ class ValidationFramework:
         4. Compute rank recovery, ROC-AUC, PR-AUC
         5. Return detailed performance metrics
 
+        Args:
+            ground_truth: Pre-built ground truth dict (avoids redundant DB queries)
+
         Returns:
             dict with comprehensive validation results
         """
         # Step 1: Ground truth
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -807,11 +811,13 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_ablation_study(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Leave-one-dimension-out ablation study.
 
-        For each of the 6 scoring dimensions, re-compute composite scores
+        For each of the 10 scoring dimensions, re-compute composite scores
         with that dimension zeroed out and measure the impact on ROC-AUC.
 
         Answers: "Which dimensions actually matter for prediction?"
@@ -819,7 +825,8 @@ class ValidationFramework:
         Returns:
             dict with per-dimension ablation results and importance ranking
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -922,14 +929,18 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_calibration_analysis(
-        self, db: AsyncSession, n_bins: int = 10
+        self,
+        db: AsyncSession,
+        n_bins: int = 10,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assess score calibration: does a score of X mean X% probability?
 
         Returns:
             dict with calibration curve data, Brier score, expected calibration error
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -1145,7 +1156,10 @@ class ValidationFramework:
         }
 
     async def run_positive_negative_validation(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
+        negative_controls: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Validate using both positive (known successes) and negative (known failures) controls.
 
@@ -1156,8 +1170,10 @@ class ValidationFramework:
         Returns:
             dict with ROC-AUC, score separation, and case-level details
         """
-        ground_truth = await self.build_ground_truth(db)
-        negative_controls = await self.build_negative_controls(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
+        if negative_controls is None:
+            negative_controls = await self.build_negative_controls(db)
 
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"]): c
@@ -1180,8 +1196,7 @@ class ValidationFramework:
                 "n_negative_matched": len(negative_pairs),
             }
 
-        # Get hypotheses for known pairs only
-        all_pairs = set(positive_pairs.keys()) | set(negative_pairs.keys())
+        # Get all hypotheses and filter to known pairs
         result = await db.execute(
             select(Hypothesis).order_by(Hypothesis.composite_score.desc())
         )
@@ -1214,6 +1229,14 @@ class ValidationFramework:
                     "failure_stage": negative_pairs[pair].get("failure_stage", ""),
                     "reason": negative_pairs[pair].get("reason", ""),
                 })
+
+        if not labels:
+            return {
+                "error": "No hypotheses matched any positive or negative control pairs",
+                "n_positive_pairs_in_db": len(positive_pairs),
+                "n_negative_pairs_in_db": len(negative_pairs),
+                "n_hypotheses_total": len(all_hypotheses),
+            }
 
         labels_arr = np.array(labels)
         scores_arr = np.array(scores)
@@ -1253,11 +1276,11 @@ class ValidationFramework:
             metrics["mann_whitney_u"] = float(u_stat)
             metrics["mann_whitney_p"] = float(u_pval)
 
-            # Cohen's d effect size
+            # Cohen's d effect size (requires >= 2 samples per group for meaningful std)
             pooled_std = np.sqrt(
                 (pos_scores.std() ** 2 + neg_scores.std() ** 2) / 2
             )
-            if pooled_std > 0:
+            if pooled_std > 0 and len(pos_scores) >= 2 and len(neg_scores) >= 2:
                 cohens_d = float(
                     (pos_scores.mean() - neg_scores.mean()) / pooled_std
                 )
@@ -1351,15 +1374,11 @@ class ValidationFramework:
         # Evaluate: among all hypotheses, where do recent cases rank?
         # (Training cases are treated as "known" — only recent cases are evaluated)
         recent_ranks = []
-        recent_scores = []
-        all_scores = []
 
         for rank, hyp in enumerate(all_hypotheses, 1):
             pair = (hyp.drug_id, hyp.cancer_type_id)
-            all_scores.append(hyp.composite_score)
             if pair in recent_pairs:
                 recent_ranks.append(rank)
-                recent_scores.append(hyp.composite_score)
 
         # Labels for AUC: recent cases = positive, everything except
         # established = negative (exclude established to avoid leakage)
@@ -1397,6 +1416,8 @@ class ValidationFramework:
                     1 for r in recent_ranks if r <= n_total * 0.25
                 ),
             }
+        else:
+            metrics["prospective_rank_recovery"] = None
 
         if n_recent_in_test > 0 and n_recent_in_test < len(test_labels):
             try:
@@ -1425,7 +1446,9 @@ class ValidationFramework:
     # ==================================================================
 
     async def run_benchmark_baselines(
-        self, db: AsyncSession
+        self,
+        db: AsyncSession,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Compare full scoring model against simple baselines.
 
@@ -1440,7 +1463,8 @@ class ValidationFramework:
         Returns:
             dict with baseline AUCs and comparison to full model
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -1466,7 +1490,10 @@ class ValidationFramework:
             return {"error": "Need both positive and negative cases"}
 
         # Full model AUC
-        full_scores = np.array([h.composite_score for h in all_hypotheses])
+        full_scores = np.array([
+            float(h.composite_score) if h.composite_score is not None else 0.0
+            for h in all_hypotheses
+        ])
         full_auc = float(roc_auc_score(labels, full_scores))
 
         baselines = {
@@ -1557,6 +1584,7 @@ class ValidationFramework:
         n_perturbations: int = 200,
         perturbation_scale: float = 0.1,
         seed: int = 42,
+        ground_truth: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assess robustness of validation metrics to weight perturbations.
 
@@ -1568,11 +1596,13 @@ class ValidationFramework:
             perturbation_scale: Standard deviation of Gaussian noise added
                 to each weight (as fraction of weight value)
             seed: Random seed for reproducibility
+            ground_truth: Pre-built ground truth dict (avoids redundant DB queries)
 
         Returns:
             dict with AUC distribution under perturbation, robustness metrics
         """
-        ground_truth = await self.build_ground_truth(db)
+        if ground_truth is None:
+            ground_truth = await self.build_ground_truth(db)
         positive_pairs = {
             (c["drug_id"], c["cancer_type_id"])
             for c in ground_truth["matched_cases"]
@@ -1607,7 +1637,10 @@ class ValidationFramework:
             ])
 
         # Baseline AUC
-        baseline_scores = np.array([h.composite_score for h in all_hypotheses])
+        baseline_scores = np.array([
+            float(h.composite_score) if h.composite_score is not None else 0.0
+            for h in all_hypotheses
+        ])
         baseline_auc = float(roc_auc_score(labels, baseline_scores))
 
         rng = np.random.default_rng(seed)
@@ -1623,17 +1656,21 @@ class ValidationFramework:
 
             # Renormalize to sum to 1
             total = sum(perturbed.values())
-            if total > 0:
-                for dim in perturbed:
-                    perturbed[dim] /= total
-            else:
+            if total <= 0:
                 continue
+
+            for dim in perturbed:
+                perturbed[dim] /= total
 
             # Compute scores with perturbed weights
             perturbed_scores = np.zeros(len(all_hypotheses))
             for dim in DIMENSIONS:
                 perturbed_scores += perturbed[dim] * dim_score_matrix[dim]
             perturbed_scores = np.clip(perturbed_scores, 0, 100)
+
+            # Skip if all scores are identical (causes sklearn ValueError)
+            if perturbed_scores.std() < 1e-10:
+                continue
 
             try:
                 p_auc = float(roc_auc_score(labels, perturbed_scores))

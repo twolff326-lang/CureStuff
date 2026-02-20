@@ -302,7 +302,7 @@ class TestKnownRepurposingFailures:
     """Validate the KNOWN_REPURPOSING_FAILURES constant."""
 
     def test_has_entries(self):
-        assert len(KNOWN_REPURPOSING_FAILURES) >= 25
+        assert len(KNOWN_REPURPOSING_FAILURES) >= 22
 
     def test_tuple_structure(self):
         """Each entry should be (drug_fragment, cancer_fragment, failure_stage, reason)."""
@@ -355,6 +355,20 @@ class TestKnownRepurposingFailures:
         drugs_cancers = {(c[0], c[1]) for c in KNOWN_REPURPOSING_FAILURES}
         # Bevacizumab breast cancer approval was famously withdrawn by FDA
         assert ("bevacizumab", "breast") in drugs_cancers
+
+    def test_no_conflict_with_positive_ground_truth(self):
+        """No drug-cancer pair should appear in both positive and negative datasets.
+
+        The fragment-based DB matching can't distinguish clinical settings
+        (e.g., adjuvant vs metastatic), so the same drug+cancer fragment
+        in both lists would create a DB-level contradiction.
+        """
+        positive_pairs = {(c[0], c[1]) for c in KNOWN_REPURPOSING_CASES}
+        negative_pairs = {(c[0], c[1]) for c in KNOWN_REPURPOSING_FAILURES}
+        overlap = positive_pairs & negative_pairs
+        assert len(overlap) == 0, (
+            f"Drug-cancer pairs in both positive and negative sets: {overlap}"
+        )
 
 
 # ===================================================================
