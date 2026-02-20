@@ -340,6 +340,9 @@ class TestTallulaEngine:
                     "safety": 5.0,
                     "novelty": 98.0,
                     "causal_dependency": 90.0,
+                    "gnn_link": 0.0,
+                    "mutation_context": 0.0,
+                    "polypharmacology": 0.0,
                 },
             },
             # Should be WEAK: low everywhere
