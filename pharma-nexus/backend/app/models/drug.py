@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -69,6 +70,7 @@ class DrugTarget(Base):
     target = relationship("Target", back_populates="drug_targets")
 
     __table_args__ = (
+        UniqueConstraint("drug_id", "target_id", name="uq_drug_targets_drug_target"),
         Index("ix_drug_targets_drug_target", "drug_id", "target_id"),
         Index("ix_drug_targets_references", "references", postgresql_using="gin"),
     )
@@ -88,6 +90,7 @@ class LiteratureDrug(Base):
     drug = relationship("Drug")
 
     __table_args__ = (
+        UniqueConstraint("literature_id", "drug_id", name="uq_literature_drugs_lit_drug"),
         Index("ix_literature_drugs_lit_drug", "literature_id", "drug_id"),
     )
 
@@ -105,5 +108,6 @@ class TrialDrug(Base):
     drug = relationship("Drug")
 
     __table_args__ = (
+        UniqueConstraint("trial_id", "drug_id", name="uq_trial_drugs_trial_drug"),
         Index("ix_trial_drugs_trial_drug", "trial_id", "drug_id"),
     )

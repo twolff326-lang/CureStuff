@@ -196,15 +196,14 @@ class ClinicalTrialsConnector(BaseConnector):
         drug_name: str,
     ) -> int:
         """Fetch cancer-related trials for a single drug."""
-        await self._rate_limiter.acquire()
-
         cancer_terms = (
             "cancer OR tumor OR neoplasm OR carcinoma OR lymphoma "
             "OR leukemia OR melanoma OR sarcoma"
         )
 
         try:
-            resp = await client.get(
+            resp = await self.http_get(
+                client,
                 CTGOV_API_BASE,
                 params={
                     "query.term": drug_name,
@@ -216,9 +215,7 @@ class ClinicalTrialsConnector(BaseConnector):
                     "pageSize": "50",
                 },
                 headers=self._headers,
-                timeout=httpx.Timeout(60.0),
             )
-            resp.raise_for_status()
             data = resp.json()
         except Exception:
             return 0
@@ -234,6 +231,14 @@ class ClinicalTrialsConnector(BaseConnector):
                 if not record:
                     continue
 
+                # Match conditions to cancer_type_id via TCGA codes
+                conditions = record.get("conditions", [])
+                for condition in conditions:
+                    tcga_code = CONDITION_TO_TCGA.get(condition.lower())
+                    if tcga_code and tcga_code in self._tcga_to_ct_id:
+                        record["cancer_type_id"] = self._tcga_to_ct_id[tcga_code]
+                        break
+
                 # Upsert trial
                 stmt = pg_insert(ClinicalTrial.__table__).values(**record)
                 stmt = stmt.on_conflict_do_update(
@@ -242,6 +247,7 @@ class ClinicalTrialsConnector(BaseConnector):
                         "title": stmt.excluded.title,
                         "status": stmt.excluded.status,
                         "phase": stmt.excluded.phase,
+                        "cancer_type_id": stmt.excluded.cancer_type_id,
                         "conditions": stmt.excluded.conditions,
                         "interventions": stmt.excluded.interventions,
                         "enrollment": stmt.excluded.enrollment,

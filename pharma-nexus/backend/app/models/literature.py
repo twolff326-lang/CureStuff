@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -80,6 +81,7 @@ class LiteratureTarget(Base):
     target = relationship("Target")
 
     __table_args__ = (
+        UniqueConstraint("literature_id", "target_id", name="uq_literature_targets_lit_target"),
         Index("ix_literature_targets_lit_target", "literature_id", "target_id"),
     )
 
@@ -100,5 +102,6 @@ class LiteratureCancer(Base):
     cancer_type = relationship("CancerType")
 
     __table_args__ = (
+        UniqueConstraint("literature_id", "cancer_type_id", name="uq_literature_cancers_lit_cancer"),
         Index("ix_literature_cancers_lit_cancer", "literature_id", "cancer_type_id"),
     )

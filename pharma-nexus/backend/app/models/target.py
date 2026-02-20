@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -51,6 +52,10 @@ class ProteinInteraction(Base):
     source = Column(String(50), nullable=False)
 
     __table_args__ = (
+        UniqueConstraint(
+            "protein_a_uniprot", "protein_b_uniprot",
+            name="uq_protein_interactions_pair",
+        ),
         Index(
             "ix_protein_interactions_pair",
             "protein_a_uniprot",
