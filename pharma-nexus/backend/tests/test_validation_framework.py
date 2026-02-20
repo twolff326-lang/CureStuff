@@ -236,7 +236,7 @@ class TestKnownRepurposingCases:
     """Validate the KNOWN_REPURPOSING_CASES constant."""
 
     def test_has_entries(self):
-        assert len(KNOWN_REPURPOSING_CASES) > 30
+        assert len(KNOWN_REPURPOSING_CASES) > 100
 
     def test_tuple_structure(self):
         """Each entry should be (drug_fragment, cancer_fragment, evidence_level)."""
@@ -254,15 +254,19 @@ class TestKnownRepurposingCases:
 
     def test_has_fda_approved(self):
         fda = [c for c in KNOWN_REPURPOSING_CASES if c[2] == "fda_approved"]
-        assert len(fda) >= 10
+        assert len(fda) >= 50
+
+    def test_has_phase3(self):
+        p3 = [c for c in KNOWN_REPURPOSING_CASES if c[2] == "phase3_success"]
+        assert len(p3) >= 3
 
     def test_has_phase2(self):
         p2 = [c for c in KNOWN_REPURPOSING_CASES if c[2] == "phase2_positive"]
-        assert len(p2) >= 5
+        assert len(p2) >= 20
 
     def test_has_preclinical(self):
         pre = [c for c in KNOWN_REPURPOSING_CASES if c[2] == "preclinical_validated"]
-        assert len(pre) >= 3
+        assert len(pre) >= 15
 
     def test_no_empty_strings(self):
         for drug, cancer, level in KNOWN_REPURPOSING_CASES:
