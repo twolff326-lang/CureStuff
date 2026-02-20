@@ -137,8 +137,9 @@ class TestComputeCompositeScore:
         scores["pathway_overlap"]["score"] = 80
         scores["novelty"]["score"] = 90
         result = config.compute_composite_score(scores, DEFAULT_WEIGHTS)
-        # The exact value depends on weights; just check it's reasonable
-        assert 40 < result < 70
+        # 80*0.14 + 50*0.14 + 50*0.12 + 50*0.10 + 50*0.07 + 90*0.10
+        # + 50*0.13 + 50*0.0 + 50*0.12 + 50*0.08 = 58.2
+        assert result == 58.2
 
     def test_capped_at_100(self):
         """Composite never exceeds 100 even with abnormal scores."""

@@ -92,14 +92,26 @@ class TestInterpretCalibration:
         result = _interpret_calibration(0.30)
         assert "very poorly" in result
 
-    def test_boundary_005(self):
+    def test_just_below_005(self):
         assert "well calibrated" in _interpret_calibration(0.049)
 
-    def test_boundary_015(self):
+    def test_at_005(self):
+        """Exactly 0.05 should be 'moderately' (boundary uses strict <)."""
+        assert "moderately" in _interpret_calibration(0.05)
+
+    def test_just_below_015(self):
         assert "moderately" in _interpret_calibration(0.149)
 
-    def test_boundary_025(self):
+    def test_at_015(self):
+        """Exactly 0.15 should be 'poorly' (boundary uses strict <)."""
+        assert "poorly" in _interpret_calibration(0.15)
+
+    def test_just_below_025(self):
         assert "poorly" in _interpret_calibration(0.249)
+
+    def test_at_025(self):
+        """Exactly 0.25 should be 'very poorly' (boundary uses strict <)."""
+        assert "very poorly" in _interpret_calibration(0.25)
 
     def test_zero_brier(self):
         """Perfect calibration."""

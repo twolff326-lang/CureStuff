@@ -261,7 +261,8 @@ class TestScoreSLPotential:
                 {"name": "Cell cycle"},
             ],
         )
-        assert score >= 75
+        # 950 >= 900 → 40, 3 pathways >= 3 → +35, "DNA repair" match → +15 = 90
+        assert score == 90
 
     def test_no_interaction_no_pathways(self, analyzer):
         score = analyzer._score_sl_potential(
@@ -275,7 +276,8 @@ class TestScoreSLPotential:
             interaction_score=700,
             shared_pathways=[{"name": "MAPK signaling"}],
         )
-        assert 30 <= score <= 60
+        # 700 >= 700 → 25, 1 pathway >= 1 → +20, no DNA repair match = 45
+        assert score == 45
 
     def test_weak_interaction(self, analyzer):
         score = analyzer._score_sl_potential(
@@ -285,7 +287,7 @@ class TestScoreSLPotential:
         assert score == 10
 
     def test_dna_repair_bonus(self, analyzer):
-        """DNA repair pathways get a bonus."""
+        """DNA repair pathways get a +15 bonus."""
         without_bonus = analyzer._score_sl_potential(
             interaction_score=700,
             shared_pathways=[{"name": "MAPK signaling"}],
@@ -294,15 +296,16 @@ class TestScoreSLPotential:
             interaction_score=700,
             shared_pathways=[{"name": "DNA repair pathway"}],
         )
-        assert with_bonus > without_bonus
+        assert without_bonus == 45  # 25 + 20, no DNA match
+        assert with_bonus == 60  # 25 + 20 + 15 (DNA repair match)
 
     def test_homologous_recombination_bonus(self, analyzer):
         score = analyzer._score_sl_potential(
             interaction_score=500,
             shared_pathways=[{"name": "Homologous recombination repair"}],
         )
-        # Should include the DNA repair bonus
-        assert score > 30
+        # 500 >= 400 → 10, 1 pathway >= 1 → +20, "homologous recombination" match → +15 = 45
+        assert score == 45
 
     def test_capped_at_100(self, analyzer):
         score = analyzer._score_sl_potential(
@@ -314,7 +317,8 @@ class TestScoreSLPotential:
                 {"name": "Nucleotide excision repair"},
             ],
         )
-        assert score <= 100
+        # 999 >= 900 → 40, 4 pathways >= 3 → +35, first "DNA repair" match → +15 = 90
+        assert score == 90
 
     def test_below_400_no_interaction_score(self, analyzer):
         score = analyzer._score_sl_potential(
