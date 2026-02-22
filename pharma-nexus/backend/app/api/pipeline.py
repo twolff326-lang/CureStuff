@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -72,11 +72,17 @@ async def start_pipeline(
     else:
         enabled_phases = [key for key, _, _, default in PIPELINE_PHASES if default]
 
-    # Check no pipeline is already running (use FOR UPDATE to prevent race)
+    # Acquire an advisory lock to serialize pipeline creation.
+    # FOR UPDATE alone is insufficient: when no running pipeline exists,
+    # the lock targets zero rows, so concurrent requests both pass.
+    # pg_advisory_xact_lock is released automatically when the
+    # transaction commits or rolls back.
+    _PIPELINE_LOCK_KEY = 73019  # arbitrary constant
+    await db.execute(text(f"SELECT pg_advisory_xact_lock({_PIPELINE_LOCK_KEY})"))
+
     existing = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.status == "running")
-        .with_for_update(skip_locked=True)
         .limit(1)
     )
     if existing.scalar_one_or_none():
@@ -130,6 +136,21 @@ async def start_pipeline(
         },
     )
 
+    # Store the Celery task ID so the cancel endpoint can revoke it.
+    # If this second commit fails, the run and task are already live —
+    # return success anyway since only SIGTERM revocation is lost
+    # (the orchestrator's DB status check still works for cancellation).
+    try:
+        run.config = {**config, "_celery_task_id": task.id}
+        flag_modified(run, "config")
+        await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "Pipeline run %d: task ID storage failed (%s). "
+            "Cancel via SIGTERM will not work for this run.",
+            run_id, exc,
+        )
+
     logger.info("Pipeline run %d started (task=%s, phases=%s)", run_id, task.id, enabled_phases)
 
     return {
@@ -175,6 +196,7 @@ async def cancel_current_pipeline(
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.status == "running")
+        .with_for_update(skip_locked=True)
         .limit(1)
     )
     run = result.scalar_one_or_none()
@@ -197,7 +219,9 @@ async def cancel_pipeline_run(
     Marks the run and any pending phases as cancelled so a new run can start.
     """
     result = await db.execute(
-        select(PipelineRun).where(PipelineRun.id == run_id)
+        select(PipelineRun)
+        .where(PipelineRun.id == run_id)
+        .with_for_update(skip_locked=True)
     )
     run = result.scalar_one_or_none()
     if not run:
@@ -226,7 +250,19 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
     run.completed_at = datetime.now(timezone.utc)
     run.phases = phases
     flag_modified(run, "phases")
-    # No explicit commit — get_db auto-commits after the handler returns.
+
+    # Commit BEFORE revoking the Celery task so the orchestrator sees
+    # status="cancelled" when it checks the DB after receiving SIGTERM.
+    await db.commit()
+
+    # Revoke the Celery orchestrator task so it stops between phases.
+    task_id = (run.config or {}).get("_celery_task_id")
+    if task_id:
+        try:
+            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+            logger.info("Revoked Celery task %s for pipeline run %d", task_id, run.id)
+        except Exception as exc:
+            logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
 
     logger.info("Pipeline run %d cancelled", run.id)
     return {"run_id": run.id, "status": "cancelled"}

@@ -13,7 +13,14 @@ export async function fetchApi<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      // Response body wasn't JSON — use the status text fallback.
+    }
+    throw new Error(detail);
   }
 
   return response.json();
