@@ -14,11 +14,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.database import get_db, async_session_factory
+from app.database import get_db, async_session_factory, engine
 from app.models.pipeline_run import PipelineRun
 from app.tasks.celery_app import celery_app
 from app.tasks.pipeline import PIPELINE_PHASES
@@ -200,80 +200,77 @@ async def cancel_pipeline_run(run_id: int):
 
 
 async def _safe_cancel(run_id: int | None) -> JSONResponse:
-    """Self-contained cancel: own session, own error handling, returns JSONResponse.
+    """Cancel via raw SQL — no ORM, no FOR UPDATE, single atomic UPDATE.
 
-    Bypasses get_db and HTTPException entirely so nothing in the
-    middleware / exception-handler chain can mangle the response.
+    Uses engine.connect() directly (not even a Session) so there is
+    nothing that can interfere: no dependency injection, no ORM identity
+    map, no expire-on-commit, no middleware exception chain.
     """
     try:
-        async with async_session_factory() as session:
+        async with engine.connect() as conn:
+            # Single atomic UPDATE — cancels the run and all pending/running
+            # phases in one statement.  Returns the updated row so we know
+            # what happened.
             if run_id is not None:
-                result = await session.execute(
-                    select(PipelineRun)
-                    .where(PipelineRun.id == run_id)
-                    .with_for_update()
-                )
+                where_clause = "id = :rid AND status = 'running'"
+                params = {"rid": run_id}
             else:
-                result = await session.execute(
-                    select(PipelineRun)
-                    .where(PipelineRun.status == "running")
-                    .with_for_update()
-                    .limit(1)
-                )
-            run = result.scalar_one_or_none()
+                # Pick the single running row (if any).
+                where_clause = "id = (SELECT id FROM pipeline_runs WHERE status = 'running' LIMIT 1)"
+                params = {}
 
-            if not run:
-                return JSONResponse(
-                    status_code=404,
-                    content={"detail": "No running pipeline found"},
-                )
+            result = await conn.execute(
+                text(f"""
+                    UPDATE pipeline_runs
+                    SET status = 'cancelled',
+                        current_phase = NULL,
+                        completed_at = NOW(),
+                        phases = (
+                            SELECT COALESCE(jsonb_agg(
+                                CASE WHEN elem->>'status' IN ('pending','running')
+                                     THEN jsonb_set(elem, '{{status}}', '"cancelled"')
+                                     ELSE elem
+                                END
+                            ), '[]'::jsonb)
+                            FROM jsonb_array_elements(phases) AS elem
+                        )
+                    WHERE {where_clause}
+                    RETURNING id, config
+                """),
+                params,
+            )
+            row = result.mappings().first()
+            await conn.commit()
 
-            if run.status != "running":
-                return JSONResponse(
-                    status_code=409,
-                    content={"detail": f"Pipeline run {run.id} is already '{run.status}'"},
-                )
+        if not row:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "No running pipeline found (or already cancelled)"},
+            )
 
-            # Read task_id before modifying anything.
-            task_id = (run.config or {}).get("_celery_task_id")
+        cancelled_id = row["id"]
+        task_id = (row["config"] or {}).get("_celery_task_id")
 
-            # Mark pending/running phases as cancelled.
-            phases = [dict(p) for p in (run.phases or [])]
-            for p in phases:
-                if p.get("status") in ("pending", "running"):
-                    p["status"] = "cancelled"
-
-            run.status = "cancelled"
-            run.current_phase = None
-            run.completed_at = datetime.now(timezone.utc)
-            run.phases = phases
-            flag_modified(run, "phases")
-
-            await session.commit()
-
-        # Revoke the Celery task AFTER the session is closed.
+        # Best-effort Celery revoke (non-blocking).
         if task_id:
             try:
                 await asyncio.to_thread(
                     celery_app.control.revoke, task_id, terminate=True, signal="SIGTERM",
                 )
-                logger.info("Revoked Celery task %s for pipeline run %s", task_id, run_id)
-            except Exception as exc:
-                logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
+            except Exception:
+                pass
 
-        logger.info("Pipeline run %s cancelled", run_id)
+        logger.info("Pipeline run %s cancelled", cancelled_id)
         return JSONResponse(
             status_code=200,
-            content={"run_id": run.id, "status": "cancelled"},
+            content={"run_id": cancelled_id, "status": "cancelled"},
         )
 
     except Exception as exc:
         logger.exception("Cancel failed for run_id=%s", run_id)
         return JSONResponse(
             status_code=500,
-            content={
-                "detail": f"Cancel failed: {type(exc).__name__}: {exc}",
-            },
+            content={"detail": f"Cancel failed: {type(exc).__name__}: {exc}"},
         )
 
 
