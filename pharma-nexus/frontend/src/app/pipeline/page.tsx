@@ -470,6 +470,13 @@ export default function PipelinePage() {
         </div>
       )}
 
+      {/* Error banner — always visible so cancel/launch errors aren't hidden */}
+      {error && (
+        <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+          <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
       {/* Configuration panel (only when not running and done loading) */}
       {!isRunning && !loading && (
         <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-6 space-y-5">
@@ -500,12 +507,6 @@ export default function PipelinePage() {
               </label>
             ))}
           </div>
-
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-            </div>
-          )}
 
           <button
             onClick={handleLaunch}
