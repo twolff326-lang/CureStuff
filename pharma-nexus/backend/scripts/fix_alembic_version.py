@@ -24,12 +24,13 @@ if not dsn:
 # psycopg2 wants postgresql:// not postgresql+psycopg2://
 dsn = dsn.replace("postgresql+psycopg2://", "postgresql://")
 
-# Stamp to one before our new migration so it runs on upgrade.
-LATEST_REVISION = "008"
+# Stamp to latest known migration when the DB has an unknown revision.
+LATEST_REVISION = "013"
 
 # All valid revision IDs in the migration chain.
 KNOWN_REVISIONS = {
     "001", "002", "003", "004", "005", "006", "007", "008", "009",
+    "010", "011", "012", "013",
 }
 
 try:
