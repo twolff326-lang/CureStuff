@@ -88,30 +88,38 @@ export default function PipelinePage() {
   const [history, setHistory] = useState<PipelineRunSummary[]>([]);
 
   /* -- ui state ---------------------------------------------------- */
+  const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /* -- Load available phases on mount ------------------------------ */
   useEffect(() => {
-    fetchApi<{ phases: Phase[] }>("/api/pipeline/phases").then((data) => {
-      setAvailablePhases(data.phases);
-      setSelected(
-        new Set(data.phases.filter((p) => p.default_enabled).map((p) => p.key))
-      );
-    });
+    fetchApi<{ phases: Phase[] }>("/api/pipeline/phases")
+      .then((data) => {
+        setAvailablePhases(data.phases);
+        setSelected(
+          new Set(data.phases.filter((p) => p.default_enabled).map((p) => p.key))
+        );
+      })
+      .catch(() => {
+        setError("Failed to load pipeline phases. Is the backend running?");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   /* -- Load history + check for active run on mount --------------- */
   const loadHistory = useCallback(() => {
-    fetchApi<{ runs: PipelineRunSummary[] }>("/api/pipeline/runs").then(
-      (data) => {
+    fetchApi<{ runs: PipelineRunSummary[] }>("/api/pipeline/runs")
+      .then((data) => {
         setHistory(data.runs);
         const running = data.runs.find((r) => r.status === "running");
         if (running) {
           pollRun(running.id);
         }
-      }
-    );
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -196,6 +204,34 @@ export default function PipelinePage() {
           Select which phases to include, then launch.
         </p>
       </div>
+
+      {/* Loading state */}
+      {loading && !activeRun && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-6 flex items-center justify-center gap-3">
+          <svg
+            className="animate-spin h-5 w-5 text-blue-600"
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
+          </svg>
+          <span className="text-sm text-slate-600 dark:text-slate-400">
+            Loading pipeline configuration...
+          </span>
+        </div>
+      )}
 
       {/* Active run progress */}
       {activeRun && (
@@ -342,8 +378,8 @@ export default function PipelinePage() {
         </div>
       )}
 
-      {/* Configuration panel (only when not running) */}
-      {!isRunning && (
+      {/* Configuration panel (only when not running and done loading) */}
+      {!isRunning && !loading && (
         <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-6 space-y-5">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
             Configure Pipeline
