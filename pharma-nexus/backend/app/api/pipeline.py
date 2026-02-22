@@ -168,7 +168,7 @@ async def cancel_pipeline_run(
     run_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a running pipeline.
+    """Cancel a running pipeline by ID.
 
     Marks the run and any pending phases as cancelled so a new run can start.
     """
@@ -178,10 +178,39 @@ async def cancel_pipeline_run(
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+
+    return await _cancel_run(run, db)
+
+
+@router.post("/cancel")
+async def cancel_current_pipeline(
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel the currently-running pipeline (no run_id needed).
+
+    Finds whichever pipeline run has status='running' and cancels it.
+    """
+    result = await db.execute(
+        select(PipelineRun)
+        .where(PipelineRun.status == "running")
+        .limit(1)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(
+            status_code=404,
+            detail="No running pipeline found",
+        )
+
+    return await _cancel_run(run, db)
+
+
+async def _cancel_run(run: PipelineRun, db: AsyncSession):
+    """Shared logic to cancel a pipeline run."""
     if run.status not in ("running",):
         raise HTTPException(
             status_code=409,
-            detail=f"Pipeline run {run_id} is already '{run.status}'",
+            detail=f"Pipeline run {run.id} is already '{run.status}'",
         )
 
     # Mark pending/running phases as cancelled
@@ -196,8 +225,8 @@ async def cancel_pipeline_run(
     run.phases = phases
     await db.commit()
 
-    logger.info("Pipeline run %d cancelled", run_id)
-    return {"run_id": run_id, "status": "cancelled"}
+    logger.info("Pipeline run %d cancelled", run.id)
+    return {"run_id": run.id, "status": "cancelled"}
 
 
 @router.get("/runs")
