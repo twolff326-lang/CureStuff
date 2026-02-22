@@ -397,11 +397,25 @@ async def get_ingestion_logs(
 # Junction/child tables are listed before parent tables so that
 # CASCADE deletes work correctly even without ON DELETE CASCADE.
 _DELETABLE_TABLES: dict[str, list[str]] = {
-    # Ingestion data tables
-    "drugs": ["gnn_predictions", "literature_drugs", "trial_drugs", "drug_targets", "bioassays", "drugs"],
-    "targets": ["literature_targets", "pathway_targets", "drug_targets", "protein_interactions", "targets"],
+    # Ingestion data tables — cascade lists name child tables to delete
+    # before the parent.  DB-level ON DELETE CASCADE handles indirect
+    # children, but listing them here gives accurate per-table counts.
+    "drugs": [
+        "gnn_predictions", "combination_hypotheses",
+        "literature_drugs", "trial_drugs", "drug_targets", "bioassays",
+        "drugs",
+    ],
+    "targets": [
+        "target_disease_associations", "literature_targets",
+        "pathway_targets", "drug_targets", "protein_interactions",
+        "targets",
+    ],
     "drug_targets": ["drug_targets"],
-    "cancer_types": ["gnn_predictions", "literature_cancers", "mutations", "molecular_profiles", "cancer_types"],
+    "cancer_types": [
+        "gnn_predictions", "gene_expression", "combination_hypotheses",
+        "literature_cancers", "mutations", "molecular_profiles",
+        "cancer_types",
+    ],
     "molecular_profiles": ["molecular_profiles"],
     "mutations": ["mutations"],
     "pathways": ["pathway_targets", "pathways"],
@@ -411,6 +425,14 @@ _DELETABLE_TABLES: dict[str, list[str]] = {
     "clinical_trials": ["trial_drugs", "clinical_trials"],
     "bioassays": ["bioassays"],
     "gene_dependencies": ["gene_dependencies"],
+    "gene_expression": ["gene_expression"],
+    "target_disease_associations": ["target_disease_associations"],
+    "hypotheses": [
+        "score_history", "literature_alerts", "monitoring_config",
+        "tallula_discoveries", "hypothesis_evidence", "hypothesis_analyses",
+        "hypotheses",
+    ],
+    "hypothesis_analyses": ["hypothesis_analyses"],
     "combination_hypotheses": ["combination_hypotheses"],
     "gnn_predictions": ["gnn_predictions"],
     "gnn_training_runs": ["gnn_predictions", "gnn_training_runs"],
@@ -431,10 +453,14 @@ def _get_table_model(table_name: str):
     from app.models.pathway import Pathway, PathwayTarget
     from app.models.literature import Literature, LiteratureTarget, LiteratureCancer
     from app.models.clinical_trial import ClinicalTrial
-    from app.models.evidence import Bioassay
+    from app.models.evidence import Bioassay, GeneExpression
+    from app.models.hypothesis import Hypothesis, HypothesisEvidence
+    from app.models.llm_analysis import HypothesisAnalysis
+    from app.models.tallula import TallulaDiscovery
     from app.models.gene_dependency import GeneDependency, CombinationHypothesis
     from app.models.gnn_prediction import GNNTrainingRun, GNNPrediction
     from app.models.literature_alert import ScoreHistory, LiteratureAlert, MonitoringConfig
+    from app.models.target_disease import TargetDiseaseAssociation
 
     mapping = {
         "drugs": Drug,
@@ -453,7 +479,13 @@ def _get_table_model(table_name: str):
         "clinical_trials": ClinicalTrial,
         "trial_drugs": TrialDrug,
         "bioassays": Bioassay,
+        "gene_expression": GeneExpression,
         "gene_dependencies": GeneDependency,
+        "target_disease_associations": TargetDiseaseAssociation,
+        "hypotheses": Hypothesis,
+        "hypothesis_evidence": HypothesisEvidence,
+        "hypothesis_analyses": HypothesisAnalysis,
+        "tallula_discoveries": TallulaDiscovery,
         "combination_hypotheses": CombinationHypothesis,
         "gnn_predictions": GNNPrediction,
         "gnn_training_runs": GNNTrainingRun,

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -72,11 +72,17 @@ async def start_pipeline(
     else:
         enabled_phases = [key for key, _, _, default in PIPELINE_PHASES if default]
 
-    # Check no pipeline is already running (use FOR UPDATE to prevent race)
+    # Acquire an advisory lock to serialize pipeline creation.
+    # FOR UPDATE alone is insufficient: when no running pipeline exists,
+    # the lock targets zero rows, so concurrent requests both pass.
+    # pg_advisory_xact_lock is released automatically when the
+    # transaction commits or rolls back.
+    _PIPELINE_LOCK_KEY = 73019  # arbitrary constant
+    await db.execute(text(f"SELECT pg_advisory_xact_lock({_PIPELINE_LOCK_KEY})"))
+
     existing = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.status == "running")
-        .with_for_update(skip_locked=True)
         .limit(1)
     )
     if existing.scalar_one_or_none():
@@ -131,9 +137,19 @@ async def start_pipeline(
     )
 
     # Store the Celery task ID so the cancel endpoint can revoke it.
-    run.config = {**config, "_celery_task_id": task.id}
-    flag_modified(run, "config")
-    await db.commit()
+    # If this second commit fails, the run and task are already live —
+    # return success anyway since only SIGTERM revocation is lost
+    # (the orchestrator's DB status check still works for cancellation).
+    try:
+        run.config = {**config, "_celery_task_id": task.id}
+        flag_modified(run, "config")
+        await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "Pipeline run %d: task ID storage failed (%s). "
+            "Cancel via SIGTERM will not work for this run.",
+            run_id, exc,
+        )
 
     logger.info("Pipeline run %d started (task=%s, phases=%s)", run_id, task.id, enabled_phases)
 
