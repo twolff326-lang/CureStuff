@@ -267,11 +267,13 @@ async def _safe_cancel(run_id: int | None) -> JSONResponse:
             content={"run_id": run.id, "status": "cancelled"},
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Cancel failed for run_id=%s", run_id)
         return JSONResponse(
             status_code=500,
-            content={"detail": "Cancel failed — check server logs"},
+            content={
+                "detail": f"Cancel failed: {type(exc).__name__}: {exc}",
+            },
         )
 
 
