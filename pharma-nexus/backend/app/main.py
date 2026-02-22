@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
@@ -87,11 +88,16 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
+        except StarletteHTTPException as exc:
+            # BaseHTTPMiddleware re-raises HTTPExceptions after
+            # ExceptionMiddleware already handled them.  Return the
+            # correct status so callers see 404/409/etc., not 500.
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            response = JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
         except Exception:
-            # Starlette's exception handler middleware re-raises exceptions
-            # after sending the error response. Catching here prevents
-            # the exception from escaping the ASGI boundary and producing
-            # spurious "Exception in ASGI application" log entries.
             elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
             response = JSONResponse(
                 status_code=500,
@@ -168,6 +174,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    # HTTPException should be handled by FastAPI's built-in handler, not here.
+    if isinstance(exc, StarletteHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
     request_id = request.headers.get("X-Request-ID", "unknown")
     logger.exception("Unhandled exception on %s %s [%s]", request.method, request.url.path, request_id)
 
