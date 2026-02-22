@@ -326,6 +326,10 @@ async def get_live_status(
             "errors": log.errors,
             "started_at": log.started_at.isoformat() if log.started_at else None,
             "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+            "data_source_version": log.data_source_version,
+            "data_downloaded_at": log.data_downloaded_at.isoformat() if log.data_downloaded_at else None,
+            "records_filtered": log.records_filtered,
+            "duration_seconds": log.duration_seconds,
         }
 
     return {"sources": sources}
@@ -372,6 +376,10 @@ async def get_ingestion_logs(
                 "errors": log.errors,
                 "started_at": log.started_at.isoformat() if log.started_at else None,
                 "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+                "data_source_version": log.data_source_version,
+                "data_downloaded_at": log.data_downloaded_at.isoformat() if log.data_downloaded_at else None,
+                "records_filtered": log.records_filtered,
+                "duration_seconds": log.duration_seconds,
             }
             for log in logs
         ],
@@ -535,6 +543,7 @@ async def cancel_task(task_id: str):
 
 # Ordered so that child/junction tables are truncated before parents.
 _ALL_TABLES = [
+    "software_versions",
     "tallula_discoveries",
     "tallula_runs",
     "validation_results",

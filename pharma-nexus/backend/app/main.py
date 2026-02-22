@@ -16,7 +16,7 @@ from app.api import (
     drugs, hypotheses, analysis, ingestion, knowledge_graph, export,
     cancer, pathways, literature, clinical_trials, llm_analysis,
     validation, combinations, tallula, gnn, literature_monitor,
-    pipeline,
+    pipeline, publication,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +193,9 @@ app.include_router(
 )
 app.include_router(
     pipeline.router, prefix="/api/pipeline", tags=["pipeline"]
+)
+app.include_router(
+    publication.router, prefix="/api/publication", tags=["publication"]
 )
 
 

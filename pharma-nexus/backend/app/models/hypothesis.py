@@ -49,6 +49,25 @@ class Hypothesis(Base):
     status = Column(String(20), nullable=False, default="generated", index=True)
     critique = Column(JSONB)
     reviewer_notes = Column(Text)
+
+    # Batch tracking — groups hypotheses from the same generation run
+    # for reproducibility and cohort-level analysis.
+    batch_id = Column(
+        String(36), nullable=True, index=True,
+        comment="UUID grouping hypotheses from the same generation batch",
+    )
+    generation_pipeline_run_id = Column(
+        Integer, ForeignKey("pipeline_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Pipeline run that generated this hypothesis",
+    )
+
+    # Per-dimension confidence intervals (bootstrap 95% CI per score)
+    dimension_confidence_intervals = Column(
+        JSONB, nullable=True,
+        comment="Per-dimension bootstrap 95% CIs, e.g. {pathway_overlap: {lower: 40, upper: 65}}",
+    )
+
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -68,6 +87,7 @@ class Hypothesis(Base):
         ),
         Index("ix_hypotheses_composite_score_desc", composite_score.desc()),
         Index("ix_hypotheses_drug_cancer", "drug_id", "cancer_type_id"),
+        Index("ix_hypotheses_batch_id", "batch_id"),
     )
 
 

@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     Index,
     Integer,
     String,
@@ -25,6 +26,33 @@ class IngestionLog(Base):
     errors = Column(JSONB, default=list)
     started_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime)
+
+    # Data source versioning — tracks exactly which version of external data
+    # was used so results are reproducible for publication.
+    data_source_version = Column(
+        String(200), nullable=True,
+        comment="External data source version (e.g. ChEMBL v33, PubChem 2025-02-20)",
+    )
+    data_downloaded_at = Column(
+        DateTime, nullable=True,
+        comment="Timestamp when the external data was actually retrieved",
+    )
+    api_url = Column(
+        String(500), nullable=True,
+        comment="Exact API URL or endpoint used for this ingestion",
+    )
+    records_filtered = Column(
+        Integer, nullable=True,
+        comment="Number of records excluded by quality/relevance filters",
+    )
+    checksum = Column(
+        String(128), nullable=True,
+        comment="SHA-256 hash of ingested data for integrity verification",
+    )
+    duration_seconds = Column(
+        Float, nullable=True,
+        comment="Wall-clock ingestion duration in seconds",
+    )
 
     __table_args__ = (
         Index("ix_ingestion_logs_errors", "errors", postgresql_using="gin"),
