@@ -398,10 +398,10 @@ async def get_ingestion_logs(
 # CASCADE deletes work correctly even without ON DELETE CASCADE.
 _DELETABLE_TABLES: dict[str, list[str]] = {
     # Ingestion data tables
-    "drugs": ["literature_drugs", "trial_drugs", "drug_targets", "bioassays", "drugs"],
+    "drugs": ["gnn_predictions", "literature_drugs", "trial_drugs", "drug_targets", "bioassays", "drugs"],
     "targets": ["literature_targets", "pathway_targets", "drug_targets", "protein_interactions", "targets"],
     "drug_targets": ["drug_targets"],
-    "cancer_types": ["literature_cancers", "mutations", "molecular_profiles", "cancer_types"],
+    "cancer_types": ["gnn_predictions", "literature_cancers", "mutations", "molecular_profiles", "cancer_types"],
     "molecular_profiles": ["molecular_profiles"],
     "mutations": ["mutations"],
     "pathways": ["pathway_targets", "pathways"],
@@ -412,6 +412,11 @@ _DELETABLE_TABLES: dict[str, list[str]] = {
     "bioassays": ["bioassays"],
     "gene_dependencies": ["gene_dependencies"],
     "combination_hypotheses": ["combination_hypotheses"],
+    "gnn_predictions": ["gnn_predictions"],
+    "gnn_training_runs": ["gnn_predictions", "gnn_training_runs"],
+    "score_history": ["score_history"],
+    "literature_alerts": ["literature_alerts"],
+    "monitoring_config": ["monitoring_config"],
     "ingestion_logs": ["ingestion_logs"],
 }
 
@@ -428,6 +433,8 @@ def _get_table_model(table_name: str):
     from app.models.clinical_trial import ClinicalTrial
     from app.models.evidence import Bioassay
     from app.models.gene_dependency import GeneDependency, CombinationHypothesis
+    from app.models.gnn_prediction import GNNTrainingRun, GNNPrediction
+    from app.models.literature_alert import ScoreHistory, LiteratureAlert, MonitoringConfig
 
     mapping = {
         "drugs": Drug,
@@ -448,6 +455,11 @@ def _get_table_model(table_name: str):
         "bioassays": Bioassay,
         "gene_dependencies": GeneDependency,
         "combination_hypotheses": CombinationHypothesis,
+        "gnn_predictions": GNNPrediction,
+        "gnn_training_runs": GNNTrainingRun,
+        "score_history": ScoreHistory,
+        "literature_alerts": LiteratureAlert,
+        "monitoring_config": MonitoringConfig,
         "ingestion_logs": IngestionLog,
     }
     return mapping.get(table_name)
@@ -547,6 +559,9 @@ _ALL_TABLES = [
     "tallula_discoveries",
     "tallula_runs",
     "validation_results",
+    "literature_alerts",
+    "monitoring_config",
+    "score_history",
     "hypothesis_evidence",
     "hypothesis_analyses",
     "llm_usage_logs",
@@ -554,6 +569,8 @@ _ALL_TABLES = [
     "gene_dependencies",
     "expression_score_cache",
     "gene_expression",
+    "gnn_predictions",
+    "gnn_training_runs",
     "bioassays",
     "trial_drugs",
     "clinical_trials",

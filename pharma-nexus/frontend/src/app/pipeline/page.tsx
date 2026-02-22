@@ -16,7 +16,7 @@ interface Phase {
 interface PhaseStatus {
   key: string;
   label: string;
-  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
   started_at: string | null;
   completed_at: string | null;
   result: Record<string, unknown> | null;
@@ -25,7 +25,7 @@ interface PhaseStatus {
 
 interface PipelineRunStatus {
   id: number;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   current_phase: string | null;
   phases: PhaseStatus[];
   config: Record<string, unknown>;
@@ -68,6 +68,8 @@ const statusColors: Record<string, string> = {
   failed: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   skipped:
     "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  cancelled:
+    "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
 };
 
 /* ------------------------------------------------------------------ */
@@ -90,6 +92,7 @@ export default function PipelinePage() {
   /* -- ui state ---------------------------------------------------- */
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /* -- Load available phases on mount ------------------------------ */
@@ -174,6 +177,32 @@ export default function PipelinePage() {
     }
   };
 
+  /* -- Cancel pipeline ------------------------------------------- */
+  const handleCancel = async () => {
+    if (!activeRun) return;
+    setCancelling(true);
+    setError(null);
+    try {
+      await fetchApi(`/api/pipeline/cancel/${activeRun.id}`, {
+        method: "POST",
+      });
+      // Poll one more time to pick up the cancelled state
+      const data = await fetchApi<PipelineRunStatus>(
+        `/api/pipeline/status/${activeRun.id}`
+      );
+      setActiveRun(data);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      loadHistory();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to cancel pipeline");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   /* -- Toggle a phase --------------------------------------------- */
   const toggle = (key: string) => {
     setSelected((prev) => {
@@ -255,11 +284,56 @@ export default function PipelinePage() {
                 {activeRun.status}
               </span>
             </div>
-            {activeRun.started_at && (
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                {elapsed(activeRun.started_at, activeRun.completed_at)}
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              {activeRun.started_at && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {elapsed(activeRun.started_at, activeRun.completed_at)}
+                </span>
+              )}
+              {activeRun.status === "running" && (
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-xs font-semibold transition-colors"
+                >
+                  {cancelling ? (
+                    <>
+                      <svg
+                        className="animate-spin h-3.5 w-3.5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                      Stopping...
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <rect x="6" y="6" width="12" height="12" rx="1" />
+                      </svg>
+                      Stop Pipeline
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Overall progress bar */}
@@ -277,6 +351,8 @@ export default function PipelinePage() {
                     ? "bg-red-500"
                     : activeRun.status === "completed"
                     ? "bg-emerald-500"
+                    : activeRun.status === "cancelled"
+                    ? "bg-orange-500"
                     : "bg-blue-500"
                 }`}
                 style={{ width: `${progressPct}%` }}
@@ -304,6 +380,8 @@ export default function PipelinePage() {
                       ? "bg-blue-500 text-white"
                       : phase.status === "failed"
                       ? "bg-red-500 text-white"
+                      : phase.status === "cancelled"
+                      ? "bg-orange-500 text-white"
                       : "bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
                   }`}
                 >
@@ -334,6 +412,14 @@ export default function PipelinePage() {
                         strokeLinejoin="round"
                         d="M6 18 18 6M6 6l12 12"
                       />
+                    </svg>
+                  ) : phase.status === "cancelled" ? (
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
                     </svg>
                   ) : (
                     idx + 1
