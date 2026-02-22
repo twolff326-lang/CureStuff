@@ -513,7 +513,7 @@ function DiscoveryCard({
             {cfg.label}
           </span>
           <span className="text-sm font-medium text-slate-800 truncate">
-            Hypothesis #{discovery.hypothesis_id}
+            {discovery.title || `Hypothesis #${discovery.hypothesis_id}`}
           </span>
           {discovery.critical_dimension && (
             <span className="hidden sm:inline text-xs text-slate-400">

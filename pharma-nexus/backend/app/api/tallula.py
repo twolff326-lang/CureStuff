@@ -23,6 +23,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.hypothesis import Hypothesis
 from app.models.tallula import TallulaDiscovery, TallulaRun
 from app.services.tallula import TallulaEngine
 
@@ -154,8 +155,10 @@ async def list_discoveries(
     if not latest_run:
         raise HTTPException(status_code=404, detail="No Tallula runs found. POST /api/tallula/run first.")
 
-    query = select(TallulaDiscovery).where(
-        TallulaDiscovery.run_id == latest_run.id
+    query = (
+        select(TallulaDiscovery, Hypothesis.title)
+        .outerjoin(Hypothesis, TallulaDiscovery.hypothesis_id == Hypothesis.id)
+        .where(TallulaDiscovery.run_id == latest_run.id)
     )
     if discovery_class:
         query = query.where(TallulaDiscovery.discovery_class == discovery_class)
@@ -163,7 +166,7 @@ async def list_discoveries(
     query = query.order_by(TallulaDiscovery.resonance.desc()).offset(offset).limit(limit)
 
     result = await db.execute(query)
-    discoveries = result.scalars().all()
+    rows = result.all()
 
     # Count
     count_query = select(func.count(TallulaDiscovery.id)).where(
@@ -185,6 +188,7 @@ async def list_discoveries(
                 "hypothesis_id": d.hypothesis_id,
                 "drug_id": d.drug_id,
                 "cancer_type_id": d.cancer_type_id,
+                "title": title or "",
                 "discovery_class": d.discovery_class,
                 "deterministic_score": d.deterministic_score,
                 "ubiquity": d.ubiquity,
@@ -195,7 +199,7 @@ async def list_discoveries(
                 "score_max": d.score_max,
                 "resonance_profile": d.resonance_profile,
             }
-            for d in discoveries
+            for d, title in rows
         ],
     }
 
@@ -220,12 +224,14 @@ async def list_resonant_discoveries(
         raise HTTPException(status_code=404, detail="No Tallula runs found.")
 
     result = await db.execute(
-        select(TallulaDiscovery).where(
+        select(TallulaDiscovery, Hypothesis.title)
+        .outerjoin(Hypothesis, TallulaDiscovery.hypothesis_id == Hypothesis.id)
+        .where(
             TallulaDiscovery.run_id == latest_run.id,
             TallulaDiscovery.discovery_class == "resonant",
         ).order_by(TallulaDiscovery.resonance.desc()).limit(limit)
     )
-    discoveries = result.scalars().all()
+    rows = result.all()
 
     return {
         "run_id": latest_run.id,
@@ -242,6 +248,7 @@ async def list_resonant_discoveries(
                 "hypothesis_id": d.hypothesis_id,
                 "drug_id": d.drug_id,
                 "cancer_type_id": d.cancer_type_id,
+                "title": title or "",
                 "deterministic_score": d.deterministic_score,
                 "resonance": d.resonance,
                 "ubiquity": d.ubiquity,
@@ -251,7 +258,7 @@ async def list_resonant_discoveries(
                 "resonance_profile": d.resonance_profile,
                 "ablation_impacts": d.ablation_impacts,
             }
-            for d in discoveries
+            for d, title in rows
         ],
     }
 
@@ -299,11 +306,12 @@ async def get_run(
         raise HTTPException(status_code=404, detail=f"Tallula run {run_id} not found")
 
     disc_result = await db.execute(
-        select(TallulaDiscovery).where(
-            TallulaDiscovery.run_id == run_id
-        ).order_by(TallulaDiscovery.resonance.desc())
+        select(TallulaDiscovery, Hypothesis.title)
+        .outerjoin(Hypothesis, TallulaDiscovery.hypothesis_id == Hypothesis.id)
+        .where(TallulaDiscovery.run_id == run_id)
+        .order_by(TallulaDiscovery.resonance.desc())
     )
-    discoveries = disc_result.scalars().all()
+    rows = disc_result.all()
 
     return {
         "run": {
@@ -318,6 +326,7 @@ async def get_run(
                 "hypothesis_id": d.hypothesis_id,
                 "drug_id": d.drug_id,
                 "cancer_type_id": d.cancer_type_id,
+                "title": title or "",
                 "discovery_class": d.discovery_class,
                 "deterministic_score": d.deterministic_score,
                 "ubiquity": d.ubiquity,
@@ -332,7 +341,7 @@ async def get_run(
                 "resonance_profile": d.resonance_profile,
                 "ablation_impacts": d.ablation_impacts,
             }
-            for d in discoveries
+            for d, title in rows
         ],
     }
 

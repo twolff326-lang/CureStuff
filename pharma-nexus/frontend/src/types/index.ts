@@ -124,6 +124,7 @@ export interface TallulaDiscovery {
   hypothesis_id: number;
   drug_id: number;
   cancer_type_id: number;
+  title?: string;
   discovery_class: "robust" | "resonant" | "fragile" | "moderate" | "weak";
   deterministic_score: number;
   ubiquity: number;
