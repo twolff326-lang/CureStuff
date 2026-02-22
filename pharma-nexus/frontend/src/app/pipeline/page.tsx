@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { fetchApi } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -319,9 +319,7 @@ export default function PipelinePage() {
                     </span>
                   </div>
                   {phase.error && (
-                    <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 truncate">
-                      {phase.error}
-                    </p>
+                    <ExpandableError error={phase.error} />
                   )}
                   {phase.result &&
                     phase.result.records_processed !== undefined && (
@@ -477,6 +475,34 @@ export default function PipelinePage() {
             })}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function ExpandableError({ error }: { error: string }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = error.length > 120;
+
+  return (
+    <div className="mt-0.5">
+      <p
+        className={`text-xs text-red-600 dark:text-red-400 ${
+          !expanded && isLong ? "truncate" : "whitespace-pre-wrap"
+        }`}
+      >
+        {error}
+      </p>
+      {isLong && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(!expanded);
+          }}
+          className="text-[11px] font-medium text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 mt-0.5"
+        >
+          {expanded ? "Show less" : "Show full error"}
+        </button>
       )}
     </div>
   );

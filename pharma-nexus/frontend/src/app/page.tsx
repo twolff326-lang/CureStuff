@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   BarChart,
@@ -34,6 +34,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<HypothesisStats | null>(null);
   const [topHypotheses, setTopHypotheses] = useState<Hypothesis[]>([]);
   const [recentLogs, setRecentLogs] = useState<IngestionLog[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   const loadAll = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -49,12 +50,41 @@ export default function DashboardPage() {
       setTopHypotheses(results[2].value.hypotheses);
     if (results[3].status === "fulfilled")
       setRecentLogs(results[3].value.logs);
+    setInitialLoading(false);
   }, []);
+
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadAll();
-    const id = setInterval(loadAll, 30_000);
-    return () => clearInterval(id);
+
+    const startPolling = () => {
+      if (!intervalRef.current) {
+        intervalRef.current = setInterval(loadAll, 30_000);
+      }
+    };
+    const stopPolling = () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        loadAll();
+        startPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [loadAll]);
 
   // Score distribution for the bar chart
@@ -86,31 +116,35 @@ export default function DashboardPage() {
           value={counts?.drugs}
           color="blue"
           href="/ingested-data"
+          loading={initialLoading}
         />
         <StatCard
           title="Hypotheses"
           value={stats?.total_hypotheses}
           color="emerald"
           href="/hypotheses"
+          loading={initialLoading}
         />
         <StatCard
           title="Cancer Types"
           value={counts?.cancer_types}
           color="purple"
+          loading={initialLoading}
         />
         <StatCard
           title="Literature Articles"
           value={counts?.literature}
           color="amber"
+          loading={initialLoading}
         />
       </div>
 
       {/* Second row: smaller stat cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 mb-8">
-        <MiniStat label="Targets" value={counts?.targets} />
-        <MiniStat label="Pathways" value={counts?.pathways} />
-        <MiniStat label="Clinical Trials" value={counts?.clinical_trials} />
-        <MiniStat label="Total Records" value={counts?.total} />
+        <MiniStat label="Targets" value={counts?.targets} loading={initialLoading} />
+        <MiniStat label="Pathways" value={counts?.pathways} loading={initialLoading} />
+        <MiniStat label="Clinical Trials" value={counts?.clinical_trials} loading={initialLoading} />
+        <MiniStat label="Total Records" value={counts?.total} loading={initialLoading} />
         <MiniStat
           label="Avg Score"
           value={
@@ -118,10 +152,12 @@ export default function DashboardPage() {
               ? Math.round(stats.average_scores.composite)
               : undefined
           }
+          loading={initialLoading}
         />
         <MiniStat
           label="Strong Hits"
           value={stats?.by_evidence_strength?.strong}
+          loading={initialLoading}
         />
       </div>
 
@@ -260,7 +296,18 @@ export default function DashboardPage() {
             Recent Ingestion Activity
           </h2>
         </div>
-        {recentLogs.length === 0 ? (
+        {initialLoading ? (
+          <div className="px-5 py-4 space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-4">
+                <div className="h-4 w-24 animate-pulse rounded bg-slate-200" />
+                <div className="h-4 w-16 animate-pulse rounded bg-slate-200" />
+                <div className="ml-auto h-4 w-12 animate-pulse rounded bg-slate-200" />
+                <div className="h-4 w-14 animate-pulse rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        ) : recentLogs.length === 0 ? (
           <div className="px-5 py-8 text-center text-sm text-slate-400">
             No ingestion runs yet.
           </div>
@@ -326,11 +373,13 @@ function StatCard({
   value,
   color,
   href,
+  loading,
 }: {
   title: string;
   value: number | undefined;
   color: string;
   href?: string;
+  loading?: boolean;
 }) {
   const colorMap: Record<string, string> = {
     blue: "from-blue-500 to-blue-600",
@@ -346,9 +395,13 @@ function StatCard({
       }`}
     >
       <p className="text-sm font-medium text-white/80">{title}</p>
-      <p className="mt-1 text-3xl font-bold tabular-nums">
-        {value != null ? value.toLocaleString() : "\u2014"}
-      </p>
+      {loading ? (
+        <div className="mt-2 h-8 w-20 animate-pulse rounded bg-white/20" />
+      ) : (
+        <p className="mt-1 text-3xl font-bold tabular-nums">
+          {value != null ? value.toLocaleString() : "\u2014"}
+        </p>
+      )}
     </div>
   );
 
@@ -358,16 +411,22 @@ function StatCard({
 function MiniStat({
   label,
   value,
+  loading,
 }: {
   label: string;
   value: number | undefined;
+  loading?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
       <p className="text-xs font-medium text-slate-400">{label}</p>
-      <p className="text-lg font-bold tabular-nums text-slate-800">
-        {value != null ? value.toLocaleString() : "\u2014"}
-      </p>
+      {loading ? (
+        <div className="mt-1 h-6 w-12 animate-pulse rounded bg-slate-200" />
+      ) : (
+        <p className="text-lg font-bold tabular-nums text-slate-800">
+          {value != null ? value.toLocaleString() : "\u2014"}
+        </p>
+      )}
     </div>
   );
 }

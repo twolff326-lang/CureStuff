@@ -26,6 +26,11 @@ export default function AnalysisPage() {
   const [topGenes, setTopGenes] = useState<TopGene[]>([]);
   const [loadingGenes, setLoadingGenes] = useState(false);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    endpoint: string;
+    label: string;
+    warning?: string;
+  } | null>(null);
 
   // Load cancer types
   useEffect(() => {
@@ -126,13 +131,23 @@ export default function AnalysisPage() {
           <PipelineButton
             label="Generate Hypotheses"
             onClick={() =>
-              triggerPipeline("hypotheses_all", "Hypothesis Generation")
+              setConfirmAction({
+                endpoint: "hypotheses_all",
+                label: "Hypothesis Generation",
+                warning:
+                  "This will generate hypotheses for all cancer types. It may take several minutes.",
+              })
             }
           />
           <PipelineButton
             label="LLM Narratives"
             onClick={() =>
-              triggerPipeline("llm_full_analysis", "LLM Full Analysis")
+              setConfirmAction({
+                endpoint: "llm_full_analysis",
+                label: "LLM Full Analysis",
+                warning:
+                  "This calls the Claude API for every qualifying hypothesis and may incur significant API costs. Are you sure?",
+              })
             }
           />
         </div>
@@ -233,6 +248,42 @@ export default function AnalysisPage() {
       {!selectedCancer && (
         <div className="rounded-lg border border-slate-200 bg-white px-5 py-12 text-center text-sm text-slate-400 shadow-sm">
           Select a cancer type above to view expression analysis.
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">
+              Confirm: {confirmAction.label}
+            </h3>
+            {confirmAction.warning && (
+              <p className="text-sm text-slate-600 mb-4">
+                {confirmAction.warning}
+              </p>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  triggerPipeline(
+                    confirmAction.endpoint,
+                    confirmAction.label,
+                  );
+                  setConfirmAction(null);
+                }}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+              >
+                Proceed
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

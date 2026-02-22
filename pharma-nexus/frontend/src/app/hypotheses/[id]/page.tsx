@@ -425,10 +425,444 @@ function AnalysisPanel({ analysis }: { analysis: LLMAnalysis }) {
           ))}
         </div>
       ) : (
-        <pre className="overflow-x-auto rounded-md bg-slate-50 p-4 text-xs text-slate-700">
-          {JSON.stringify(content, null, 2)}
-        </pre>
+        <StructuredAnalysisContent
+          analysisType={analysis.analysis_type}
+          content={content as Record<string, unknown>}
+        />
       )}
+    </div>
+  );
+}
+
+function StructuredAnalysisContent({
+  analysisType,
+  content,
+}: {
+  analysisType: string;
+  content: Record<string, unknown>;
+}) {
+  if (analysisType === "narrative") {
+    return <NarrativeRenderer content={content} />;
+  }
+  if (analysisType === "critique") {
+    return <CritiqueRenderer content={content} />;
+  }
+  if (analysisType === "confidence") {
+    return <ConfidenceRenderer content={content} />;
+  }
+  // Fallback: render unknown structured content as labeled sections
+  return <GenericStructuredRenderer content={content} />;
+}
+
+function NarrativeRenderer({ content }: { content: Record<string, unknown> }) {
+  const title = content.title as string | undefined;
+  const summary = content.summary as string | undefined;
+  const sections: [string, string][] = [
+    ["Molecular Mechanism", content.molecular_mechanism as string],
+    ["Pathway Analysis", content.pathway_analysis as string],
+    ["Expression Context", content.expression_context as string],
+    ["Clinical Relevance", content.clinical_relevance as string],
+  ].filter((s): s is [string, string] => typeof s[1] === "string" && s[1].length > 0);
+
+  const keyGenes = content.key_genes as string[] | undefined;
+  const keyPathways = content.key_pathways as string[] | undefined;
+  const confidenceNote = content.confidence_note as string | undefined;
+
+  // If content doesn't match expected shape, fall back
+  if (!title && !summary && sections.length === 0) {
+    return <GenericStructuredRenderer content={content} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {title && (
+        <h4 className="text-base font-semibold text-slate-800">{title}</h4>
+      )}
+      {summary && (
+        <p className="text-sm text-slate-600 leading-relaxed">{summary}</p>
+      )}
+      {sections.map(([heading, text]) => (
+        <div key={heading}>
+          <h5 className="text-sm font-semibold text-slate-700 mb-1">
+            {heading}
+          </h5>
+          <div className="prose prose-sm prose-slate max-w-none">
+            {text.split("\n").map((p, i) => (
+              <p key={i}>{p}</p>
+            ))}
+          </div>
+        </div>
+      ))}
+      {keyGenes && keyGenes.length > 0 && (
+        <div>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Key Genes
+          </span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {keyGenes.map((g) => (
+              <span
+                key={g}
+                className="rounded-full bg-purple-50 border border-purple-200 px-2 py-0.5 text-xs font-medium text-purple-700"
+              >
+                {g}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {keyPathways && keyPathways.length > 0 && (
+        <div>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Key Pathways
+          </span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {keyPathways.map((p) => (
+              <span
+                key={p}
+                className="rounded-full bg-blue-50 border border-blue-200 px-2 py-0.5 text-xs font-medium text-blue-700"
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {confidenceNote && (
+        <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3">
+          <span className="text-xs font-semibold text-amber-700">
+            Confidence Note
+          </span>
+          <p className="text-sm text-amber-800 mt-0.5">{confidenceNote}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CritiqueRenderer({ content }: { content: Record<string, unknown> }) {
+  const assessment = content.overall_assessment as string | undefined;
+  const summary = content.summary as string | undefined;
+  const weaknesses = content.mechanistic_weaknesses as
+    | { concern: string; severity: string; explanation: string }[]
+    | undefined;
+  const gaps = content.evidence_gaps as
+    | { gap: string; importance: string; suggestion: string }[]
+    | undefined;
+  const killCriteria = content.kill_criteria as string[] | undefined;
+  const actions = content.recommended_actions as string[] | undefined;
+
+  if (!assessment && !summary && !weaknesses && !gaps) {
+    return <GenericStructuredRenderer content={content} />;
+  }
+
+  const severityStyle: Record<string, string> = {
+    high: "bg-red-50 border-red-200 text-red-800",
+    medium: "bg-amber-50 border-amber-200 text-amber-800",
+    low: "bg-blue-50 border-blue-200 text-blue-800",
+  };
+
+  return (
+    <div className="space-y-4">
+      {assessment && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Assessment:
+          </span>
+          <span
+            className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
+              assessment === "positive"
+                ? "bg-emerald-100 text-emerald-700"
+                : assessment === "cautious"
+                  ? "bg-amber-100 text-amber-700"
+                  : assessment === "negative"
+                    ? "bg-red-100 text-red-700"
+                    : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {assessment}
+          </span>
+        </div>
+      )}
+      {summary && (
+        <p className="text-sm text-slate-600 leading-relaxed">{summary}</p>
+      )}
+      {weaknesses && weaknesses.length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-slate-700 mb-2">
+            Mechanistic Weaknesses
+          </h5>
+          <div className="space-y-2">
+            {weaknesses.map((w, i) => (
+              <div
+                key={i}
+                className={`rounded-md border px-4 py-3 ${
+                  severityStyle[w.severity] ?? "bg-slate-50 border-slate-200 text-slate-700"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-bold uppercase">
+                    {w.severity}
+                  </span>
+                  <span className="text-sm font-medium">{w.concern}</span>
+                </div>
+                <p className="text-xs leading-relaxed opacity-90">
+                  {w.explanation}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {gaps && gaps.length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-slate-700 mb-2">
+            Evidence Gaps
+          </h5>
+          <div className="space-y-2">
+            {gaps.map((g, i) => (
+              <div
+                key={i}
+                className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span
+                    className={`text-xs font-bold uppercase ${
+                      g.importance === "critical"
+                        ? "text-red-600"
+                        : g.importance === "important"
+                          ? "text-amber-600"
+                          : "text-slate-500"
+                    }`}
+                  >
+                    {g.importance}
+                  </span>
+                  <span className="text-sm font-medium text-slate-700">
+                    {g.gap}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600">{g.suggestion}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {killCriteria && killCriteria.length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-red-700 mb-2">
+            Kill Criteria
+          </h5>
+          <ul className="space-y-1">
+            {killCriteria.map((k, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-2 text-sm text-red-700"
+              >
+                <span className="mt-1 flex-shrink-0 h-1.5 w-1.5 rounded-full bg-red-400" />
+                {k}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {actions && actions.length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-slate-700 mb-2">
+            Recommended Actions
+          </h5>
+          <ul className="space-y-1">
+            {actions.map((a, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-2 text-sm text-slate-600"
+              >
+                <span className="mt-1 flex-shrink-0 h-1.5 w-1.5 rounded-full bg-blue-400" />
+                {a}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfidenceRenderer({ content }: { content: Record<string, unknown> }) {
+  const overall = content.overall_confidence as number | undefined;
+  const level = content.confidence_level as string | undefined;
+  const summary = content.summary as string | undefined;
+  const probabilities = content.probability_of_success as
+    | Record<string, number>
+    | undefined;
+  const strengthOfEvidence = content.strength_of_evidence as
+    | Record<string, string>
+    | undefined;
+  const recommendation = content.recommendation as string | undefined;
+
+  if (overall == null && !summary && !probabilities) {
+    return <GenericStructuredRenderer content={content} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {overall != null && (
+        <div className="flex items-center gap-4">
+          <div
+            className={`flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-full text-xl font-bold text-white ${
+              overall >= 70
+                ? "bg-emerald-500"
+                : overall >= 40
+                  ? "bg-blue-500"
+                  : overall >= 20
+                    ? "bg-amber-500"
+                    : "bg-slate-400"
+            }`}
+          >
+            {overall}
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-800">
+              Overall Confidence
+            </p>
+            {level && (
+              <p className="text-xs text-slate-500 capitalize">{level}</p>
+            )}
+          </div>
+        </div>
+      )}
+      {summary && (
+        <p className="text-sm text-slate-600 leading-relaxed">{summary}</p>
+      )}
+      {probabilities && Object.keys(probabilities).length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-slate-700 mb-2">
+            Probability of Success
+          </h5>
+          <div className="space-y-2">
+            {Object.entries(probabilities).map(([stage, prob]) => (
+              <div key={stage}>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-xs font-medium text-slate-600 capitalize">
+                    {stage.replace(/_/g, " ")}
+                  </span>
+                  <span className="text-xs tabular-nums font-bold text-slate-700">
+                    {(prob * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      prob >= 0.6
+                        ? "bg-emerald-500"
+                        : prob >= 0.3
+                          ? "bg-blue-500"
+                          : "bg-amber-500"
+                    }`}
+                    style={{ width: `${Math.min(100, prob * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {strengthOfEvidence && Object.keys(strengthOfEvidence).length > 0 && (
+        <div>
+          <h5 className="text-sm font-semibold text-slate-700 mb-2">
+            Strength of Evidence
+          </h5>
+          <div className="space-y-1.5">
+            {Object.entries(strengthOfEvidence).map(([key, value]) => (
+              <div key={key} className="text-sm">
+                <span className="font-medium text-slate-600 capitalize">
+                  {key.replace(/_/g, " ")}:
+                </span>{" "}
+                <span className="text-slate-500">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {recommendation && (
+        <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3">
+          <span className="text-xs font-semibold text-blue-700">
+            Recommendation
+          </span>
+          <p className="text-sm text-blue-800 mt-0.5 capitalize">
+            {recommendation.replace(/_/g, " ")}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GenericStructuredRenderer({
+  content,
+}: {
+  content: Record<string, unknown>;
+}) {
+  return (
+    <div className="space-y-3">
+      {Object.entries(content).map(([key, value]) => {
+        const label = key.replace(/_/g, " ");
+        if (typeof value === "string") {
+          return (
+            <div key={key}>
+              <h5 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-0.5">
+                {label}
+              </h5>
+              <div className="prose prose-sm prose-slate max-w-none">
+                {value.split("\n").map((p, i) => (
+                  <p key={i}>{p}</p>
+                ))}
+              </div>
+            </div>
+          );
+        }
+        if (typeof value === "number") {
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                {label}:
+              </span>
+              <span className="text-sm font-medium text-slate-700">
+                {value}
+              </span>
+            </div>
+          );
+        }
+        if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+          return (
+            <div key={key}>
+              <h5 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                {label}
+              </h5>
+              <ul className="space-y-0.5">
+                {(value as string[]).map((item, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm text-slate-600"
+                  >
+                    <span className="mt-1.5 flex-shrink-0 h-1.5 w-1.5 rounded-full bg-slate-300" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        }
+        // Complex nested objects: show as formatted JSON block
+        return (
+          <div key={key}>
+            <h5 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+              {label}
+            </h5>
+            <pre className="overflow-x-auto rounded-md bg-slate-50 p-3 text-xs text-slate-700">
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </div>
+        );
+      })}
     </div>
   );
 }
