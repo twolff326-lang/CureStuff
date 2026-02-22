@@ -9,8 +9,8 @@ New tables:
 
 Also adds gnn_link_score column to hypotheses table.
 
-Revision ID: 010
-Revises: 009
+Revision ID: 011
+Revises: 010
 Create Date: 2026-02-20 10:00:00.000000
 """
 
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision = "010"
-down_revision = "009"
+revision = "011"
+down_revision = "010"
 branch_labels = None
 depends_on = None
 
