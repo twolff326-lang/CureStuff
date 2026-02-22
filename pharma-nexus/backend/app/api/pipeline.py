@@ -12,12 +12,13 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.database import get_db
+from app.database import get_db, async_session_factory
 from app.models.pipeline_run import PipelineRun
 from app.tasks.celery_app import celery_app
 from app.tasks.pipeline import PIPELINE_PHASES
@@ -187,91 +188,91 @@ async def get_pipeline_status(
 
 
 @router.post("/cancel")
-async def cancel_current_pipeline(
-    db: AsyncSession = Depends(get_db),
-):
-    """Cancel the currently-running pipeline (no run_id needed).
-
-    Finds whichever pipeline run has status='running' and cancels it.
-    """
-    result = await db.execute(
-        select(PipelineRun)
-        .where(PipelineRun.status == "running")
-        .with_for_update()
-        .limit(1)
-    )
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(
-            status_code=404,
-            detail="No running pipeline found",
-        )
-
-    return await _cancel_run(run, db)
+async def cancel_current_pipeline():
+    """Cancel the currently-running pipeline (no run_id needed)."""
+    return await _safe_cancel(run_id=None)
 
 
 @router.post("/cancel/{run_id}")
-async def cancel_pipeline_run(
-    run_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Cancel a running pipeline by ID.
+async def cancel_pipeline_run(run_id: int):
+    """Cancel a running pipeline by ID."""
+    return await _safe_cancel(run_id=run_id)
 
-    Marks the run and any pending phases as cancelled so a new run can start.
+
+async def _safe_cancel(run_id: int | None) -> JSONResponse:
+    """Self-contained cancel: own session, own error handling, returns JSONResponse.
+
+    Bypasses get_db and HTTPException entirely so nothing in the
+    middleware / exception-handler chain can mangle the response.
     """
-    result = await db.execute(
-        select(PipelineRun)
-        .where(PipelineRun.id == run_id)
-        .with_for_update()
-    )
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
+    try:
+        async with async_session_factory() as session:
+            if run_id is not None:
+                result = await session.execute(
+                    select(PipelineRun)
+                    .where(PipelineRun.id == run_id)
+                    .with_for_update()
+                )
+            else:
+                result = await session.execute(
+                    select(PipelineRun)
+                    .where(PipelineRun.status == "running")
+                    .with_for_update()
+                    .limit(1)
+                )
+            run = result.scalar_one_or_none()
 
-    return await _cancel_run(run, db)
+            if not run:
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "No running pipeline found"},
+                )
 
+            if run.status != "running":
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": f"Pipeline run {run.id} is already '{run.status}'"},
+                )
 
-async def _cancel_run(run: PipelineRun, db: AsyncSession):
-    """Shared logic to cancel a pipeline run."""
-    if run.status not in ("running",):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Pipeline run {run.id} is already '{run.status}'",
+            # Read task_id before modifying anything.
+            task_id = (run.config or {}).get("_celery_task_id")
+
+            # Mark pending/running phases as cancelled.
+            phases = [dict(p) for p in (run.phases or [])]
+            for p in phases:
+                if p.get("status") in ("pending", "running"):
+                    p["status"] = "cancelled"
+
+            run.status = "cancelled"
+            run.current_phase = None
+            run.completed_at = datetime.now(timezone.utc)
+            run.phases = phases
+            flag_modified(run, "phases")
+
+            await session.commit()
+
+        # Revoke the Celery task AFTER the session is closed.
+        if task_id:
+            try:
+                await asyncio.to_thread(
+                    celery_app.control.revoke, task_id, terminate=True, signal="SIGTERM",
+                )
+                logger.info("Revoked Celery task %s for pipeline run %s", task_id, run_id)
+            except Exception as exc:
+                logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
+
+        logger.info("Pipeline run %s cancelled", run_id)
+        return JSONResponse(
+            status_code=200,
+            content={"run_id": run.id, "status": "cancelled"},
         )
 
-    # Mark pending/running phases as cancelled.
-    # Deep-copy the list so SQLAlchemy sees a new object for the JSONB column.
-    phases = [dict(p) for p in (run.phases or [])]
-    for p in phases:
-        if p.get("status") in ("pending", "running"):
-            p["status"] = "cancelled"
-
-    run.status = "cancelled"
-    run.current_phase = None
-    run.completed_at = datetime.now(timezone.utc)
-    run.phases = phases
-    flag_modified(run, "phases")
-
-    # Read task_id before the commit to avoid any post-commit session issues.
-    task_id = (run.config or {}).get("_celery_task_id")
-
-    # Commit BEFORE revoking the Celery task so the orchestrator sees
-    # status="cancelled" when it checks the DB after receiving SIGTERM.
-    await db.commit()
-
-    # Revoke the Celery orchestrator task so it stops between phases.
-    # Run in a thread so the synchronous Redis call doesn't block the loop.
-    if task_id:
-        try:
-            await asyncio.to_thread(
-                celery_app.control.revoke, task_id, terminate=True, signal="SIGTERM",
-            )
-            logger.info("Revoked Celery task %s for pipeline run %d", task_id, run.id)
-        except Exception as exc:
-            logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
-
-    logger.info("Pipeline run %d cancelled", run.id)
-    return {"run_id": run.id, "status": "cancelled"}
+    except Exception:
+        logger.exception("Cancel failed for run_id=%s", run_id)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Cancel failed — check server logs"},
+        )
 
 
 @router.get("/runs")

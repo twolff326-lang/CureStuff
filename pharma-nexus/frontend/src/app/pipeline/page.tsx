@@ -187,32 +187,45 @@ export default function PipelinePage() {
     if (!activeRun) return;
     setCancelling(true);
     setError(null);
+
+    // Kill the poll immediately so stale responses can't overwrite state.
+    pollGenRef.current++;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
+    // Fire the cancel request. Even if it fails, the DB may have been
+    // updated, so we ALWAYS fetch status afterward.
+    let cancelOk = false;
     try {
       await fetchApi(`/api/pipeline/cancel/${activeRun.id}`, {
         method: "POST",
       });
-      // Bump generation so any in-flight poll responses are discarded.
-      pollGenRef.current++;
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
+      cancelOk = true;
+    } catch (e: unknown) {
+      // Keep going — we'll check the real status below.
+      setError(e instanceof Error ? e.message : "Failed to cancel pipeline");
+    }
+
+    // Always fetch the real DB status regardless of cancel outcome.
+    try {
+      const data = await fetchApi<PipelineRunStatus>(
+        `/api/pipeline/status/${activeRun.id}`
+      );
+      setActiveRun(data);
+      // If the DB shows cancelled, clear the error — cancel actually worked.
+      if (data.status !== "running") {
+        if (!cancelOk) setError(null);
       }
-      // Fetch the final cancelled state.
-      try {
-        const data = await fetchApi<PipelineRunStatus>(
-          `/api/pipeline/status/${activeRun.id}`
-        );
-        setActiveRun(data);
-      } catch {
-        // Status fetch failed — mark as cancelled locally so UI updates.
+    } catch {
+      if (cancelOk) {
         setActiveRun({ ...activeRun, status: "cancelled" });
       }
-      loadHistory();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to cancel pipeline");
-    } finally {
-      setCancelling(false);
     }
+
+    loadHistory();
+    setCancelling(false);
   };
 
   /* -- Toggle a phase --------------------------------------------- */
