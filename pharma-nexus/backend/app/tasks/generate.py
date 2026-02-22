@@ -9,21 +9,12 @@ Tasks:
   - generate_all_combinations: Generate combination hypotheses for all cancer types
 """
 
-import asyncio
 import logging
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async
 
 logger = logging.getLogger(__name__)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 @celery_app.task(
@@ -70,7 +61,7 @@ def generate_hypotheses_for_cancer(self, cancer_type_id, min_score=15.0):
                     ],
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Hypothesis generation complete for cancer_type_id=%d: %d hypotheses",
             cancer_type_id,
@@ -127,7 +118,7 @@ def generate_hypotheses_for_drug(self, drug_id, min_score=15.0):
                     ],
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Hypothesis generation complete for drug_id=%d: %d hypotheses",
             drug_id,
@@ -204,7 +195,7 @@ def generate_all_hypotheses(self, min_score=15.0):
                 "results_by_cancer": results_by_cancer,
             }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Full hypothesis generation complete: %d total hypotheses, %d errors",
             result["total_generated"],
@@ -257,7 +248,7 @@ def rescore_hypotheses(self, preset_name=None):
 
                 return await engine.rescore_all(session, weights=weights)
 
-        result = _run_async(_rescore())
+        result = run_async(_rescore())
         logger.info(
             "Hypothesis rescoring complete: %d/%d rescored",
             result["rescored"],
@@ -316,7 +307,7 @@ def generate_combinations_for_cancer(
                     ],
                 }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Combination generation complete for cancer_type_id=%d: %d combinations",
             cancer_type_id, result["combinations_generated"],
@@ -387,7 +378,7 @@ def generate_all_combinations(self, min_single_score=30.0, max_pairs=200):
                 "errors": errors,
             }
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "Full combination generation complete: %d total, %d errors",
             result["total_generated"], result["errors"],

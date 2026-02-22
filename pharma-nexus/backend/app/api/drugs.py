@@ -129,7 +129,7 @@ async def get_drug_targets(drug_id: int, db: AsyncSession = Depends(get_db)):
         select(DrugTarget, Target)
         .join(Target, DrugTarget.target_id == Target.id)
         .where(DrugTarget.drug_id == drug_id)
-        .order_by(DrugTarget.binding_affinity_nm.asc().nullslast())
+        .order_by(DrugTarget.binding_affinity_nm.asc().nulls_last())
     )
     rows = result.all()
 
@@ -177,7 +177,7 @@ async def get_drug_bioassays(
         select(Bioassay, Target)
         .outerjoin(Target, Bioassay.target_id == Target.id)
         .where(Bioassay.drug_id == drug_id)
-        .order_by(Bioassay.activity_value.asc().nullslast())
+        .order_by(Bioassay.activity_value.asc().nulls_last())
         .offset(offset)
         .limit(per_page)
     )

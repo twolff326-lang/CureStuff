@@ -15,6 +15,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -73,13 +74,13 @@ class CombinationHypothesis(Base):
     __tablename__ = "combination_hypotheses"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    drug_a_id = Column(Integer, nullable=False, index=True)
-    drug_b_id = Column(Integer, nullable=False, index=True)
-    cancer_type_id = Column(Integer, nullable=False, index=True)
+    drug_a_id = Column(Integer, ForeignKey("drugs.id", ondelete="CASCADE"), nullable=False, index=True)
+    drug_b_id = Column(Integer, ForeignKey("drugs.id", ondelete="CASCADE"), nullable=False, index=True)
+    cancer_type_id = Column(Integer, ForeignKey("cancer_types.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Link back to the individual hypotheses
-    hypothesis_a_id = Column(Integer, comment="Hypothesis ID for drug A + cancer")
-    hypothesis_b_id = Column(Integer, comment="Hypothesis ID for drug B + cancer")
+    hypothesis_a_id = Column(Integer, ForeignKey("hypotheses.id", ondelete="SET NULL"), comment="Hypothesis ID for drug A + cancer")
+    hypothesis_b_id = Column(Integer, ForeignKey("hypotheses.id", ondelete="SET NULL"), comment="Hypothesis ID for drug B + cancer")
 
     # Synergy scoring (each 0-100)
     pathway_complementarity_score = Column(Float, default=0.0,

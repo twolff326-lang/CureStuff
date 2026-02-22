@@ -191,6 +191,9 @@ export default function IngestedDataPage() {
   }, [search]);
 
   // ---- Fetch rows for active tab ------------------------------
+  const literatureCountRef = useRef(counts?.literature ?? 0);
+  literatureCountRef.current = counts?.literature ?? 0;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -214,7 +217,7 @@ export default function IngestedDataPage() {
         } else if (tab.key === "literature") {
           // Literature /search requires a query — fetch nothing if empty
           setRows([]);
-          setTotal(counts?.literature ?? 0);
+          setTotal(literatureCountRef.current);
           setLoading(false);
           return;
         }
@@ -246,7 +249,7 @@ export default function IngestedDataPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, page, debouncedSearch, tab, counts?.literature]);
+  }, [activeTab, page, debouncedSearch, tab]);
 
   // ---- Tab change resets --------------------------------------
   const handleTabChange = (key: string) => {

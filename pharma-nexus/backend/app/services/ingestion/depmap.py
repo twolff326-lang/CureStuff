@@ -283,6 +283,7 @@ class DepMapConnector(BaseConnector):
                 # Infer lineage from cell line ID or use a default
                 lineage = self._infer_lineage(cell_line_id)
 
+                skipped_values = 0
                 for i, val_str in enumerate(row[1:]):
                     if i >= len(gene_names):
                         break
@@ -290,7 +291,11 @@ class DepMapConnector(BaseConnector):
                         val = float(val_str)
                         lineage_gene_effects[lineage][gene_names[i]].append(val)
                     except (ValueError, TypeError):
+                        skipped_values += 1
                         continue
+
+                if skipped_values > 0:
+                    logger.warning("Skipped %d malformed values during DepMap CSV parsing", skipped_values)
 
                 row_count += 1
                 if row_count % 100 == 0:
@@ -327,6 +332,8 @@ class DepMapConnector(BaseConnector):
                 })
 
         if records:
+            self._records_processed = len(records)
+            await self._flush_progress(session)
             count = await self.batch_upsert_composite(
                 session, GeneDependency, records,
                 conflict_columns=["gene_symbol", "lineage"],

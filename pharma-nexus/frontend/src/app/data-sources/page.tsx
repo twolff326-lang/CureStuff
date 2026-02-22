@@ -78,6 +78,10 @@ interface LogEntry {
   errors: unknown[] | null;
   started_at: string | null;
   completed_at: string | null;
+  data_source_version?: string | null;
+  data_downloaded_at?: string | null;
+  records_filtered?: number | null;
+  duration_seconds?: number | null;
 }
 
 // ---------------------------------------------------------------
@@ -329,6 +333,9 @@ export default function DataSourcesPage() {
                 <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
                   Records
                 </th>
+                <th className="px-4 py-2 text-center text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Version
+                </th>
                 <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
                   Time
                 </th>
@@ -348,9 +355,28 @@ export default function DataSourcesPage() {
                     {log.total_expected ? (
                       <span className="text-slate-400"> / {log.total_expected.toLocaleString()}</span>
                     ) : null}
+                    {log.records_filtered ? (
+                      <span className="text-amber-500 text-xs ml-1">(-{log.records_filtered.toLocaleString()})</span>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-2 text-center">
+                    {log.data_source_version ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
+                        {log.data_source_version}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs">&mdash;</span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-right text-xs text-slate-400">
                     {log.started_at ? formatTimeAgo(log.started_at) : "\u2014"}
+                    {log.duration_seconds ? (
+                      <span className="block text-[10px] text-slate-300">
+                        {log.duration_seconds < 60
+                          ? `${log.duration_seconds.toFixed(1)}s`
+                          : `${Math.floor(log.duration_seconds / 60)}m ${Math.round(log.duration_seconds % 60)}s`}
+                      </span>
+                    ) : null}
                   </td>
                 </tr>
               ))}

@@ -13,21 +13,12 @@ Tasks (LLM analysis):
   - generate_single_analysis: One specific analysis type for one hypothesis
 """
 
-import asyncio
 import logging
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async
 
 logger = logging.getLogger(__name__)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 @celery_app.task(
@@ -95,7 +86,7 @@ def compute_all_differential_expression(self, cancer_type_id=None):
 
             return results
 
-        results = _run_async(_compute())
+        results = run_async(_compute())
         total_genes = sum(
             r.get("genes_analyzed", 0) for r in results.values()
         )
@@ -192,7 +183,7 @@ def compute_drug_expression_scores(self, cancer_type_id=None):
 
             return {"scored": scored, "errors": errors}
 
-        result = _run_async(_compute())
+        result = run_async(_compute())
         logger.info(
             "Drug expression scoring complete: %d scored, %d errors",
             result["scored"],
@@ -279,7 +270,7 @@ def compute_pathway_activities(self, cancer_type_id=None):
 
             return {"computed": computed, "errors": errors}
 
-        result = _run_async(_compute())
+        result = run_async(_compute())
         logger.info(
             "Pathway activity computation complete: %d computed, %d errors",
             result["computed"],
@@ -366,7 +357,7 @@ def generate_narratives_batch(self, min_score=0.0, limit=100):
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Narrative batch complete: %d/%d generated, %d errors",
             results["completed"],
@@ -408,7 +399,7 @@ def generate_full_analysis_batch(self, min_score=50.0, limit=20):
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Full analysis batch complete: %d/%d generated, %d errors",
             results["completed"],
@@ -452,7 +443,7 @@ def generate_comparative_analyses(self, cancer_type_id=None, min_score=30.0):
                 await session.commit()
             return results
 
-        results = _run_async(_generate())
+        results = run_async(_generate())
         logger.info(
             "Comparative analysis complete: %d cancer types, %d analyses, %d errors",
             results["cancer_types_processed"],
@@ -507,7 +498,7 @@ def generate_single_analysis(self, hypothesis_id, analysis_type):
                 await session.commit()
             return result
 
-        result = _run_async(_generate())
+        result = run_async(_generate())
         logger.info(
             "%s analysis complete for hypothesis %d (model=%s, tokens=%d+%d)",
             analysis_type,

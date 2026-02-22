@@ -215,6 +215,72 @@ export default function HypothesisDetailPage() {
         </div>
       </div>
 
+      {/* Statistical metadata + batch tracking */}
+      {(h.statistical?.p_value != null || h.batch_id || h.statistical?.confidence_interval) && (
+        <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            Statistical &amp; Provenance Metadata
+          </h3>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            {h.statistical?.p_value != null && (
+              <div>
+                <span className="text-xs text-slate-400">P-value: </span>
+                <span className="font-mono font-medium text-slate-700">
+                  {h.statistical.p_value < 0.001
+                    ? h.statistical.p_value.toExponential(2)
+                    : h.statistical.p_value.toFixed(4)}
+                </span>
+                {h.statistical.p_value < 0.05 && (
+                  <span className="ml-1 text-xs text-emerald-600 font-medium">*</span>
+                )}
+              </div>
+            )}
+            {h.statistical?.fdr_adjusted_p_value != null && (
+              <div>
+                <span className="text-xs text-slate-400">FDR q-value: </span>
+                <span className="font-mono font-medium text-slate-700">
+                  {h.statistical.fdr_adjusted_p_value < 0.001
+                    ? h.statistical.fdr_adjusted_p_value.toExponential(2)
+                    : h.statistical.fdr_adjusted_p_value.toFixed(4)}
+                </span>
+              </div>
+            )}
+            {h.statistical?.confidence_interval && (
+              <div>
+                <span className="text-xs text-slate-400">95% CI: </span>
+                <span className="font-mono font-medium text-slate-700">
+                  [{h.statistical.confidence_interval.lower.toFixed(1)}, {h.statistical.confidence_interval.upper.toFixed(1)}]
+                </span>
+              </div>
+            )}
+            {h.statistical?.scoring_method_version && (
+              <div>
+                <span className="text-xs text-slate-400">Scoring: </span>
+                <span className="text-xs font-medium text-slate-600">
+                  {h.statistical.scoring_method_version}
+                </span>
+              </div>
+            )}
+            {h.batch_id && (
+              <div>
+                <span className="text-xs text-slate-400">Batch: </span>
+                <span className="font-mono text-xs text-slate-600">
+                  {h.batch_id.slice(0, 8)}
+                </span>
+              </div>
+            )}
+            {h.generation_pipeline_run_id && (
+              <div>
+                <span className="text-xs text-slate-400">Pipeline run: </span>
+                <span className="text-xs font-medium text-slate-600">
+                  #{h.generation_pipeline_run_id}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Radar chart + dimension scores */}
       <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Radar */}

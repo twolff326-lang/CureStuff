@@ -99,54 +99,55 @@ class DrugBankConnector(BaseConnector):
         # iterparse is synchronous (file I/O), but we process in batches
         # and commit asynchronously
         try:
-            for event, elem in iterparse(self._xml_path, events=("end",)):
-                if elem.tag != f"{DB_NS}drug":
-                    continue
+            with open(self._xml_path, "rb") as xml_file:
+                for event, elem in iterparse(xml_file, events=("end",)):
+                    if elem.tag != f"{DB_NS}drug":
+                        continue
 
-                # Only process top-level <drug> elements (skip nested)
-                drug_type = elem.attrib.get("type", "")
-                if drug_type != "small molecule" and drug_type != "biotech":
-                    elem.clear()
-                    continue
-
-                try:
-                    raw = self._parse_drug_element(elem)
-                    if raw is None:
+                    # Only process top-level <drug> elements (skip nested)
+                    drug_type = elem.attrib.get("type", "")
+                    if drug_type != "small molecule" and drug_type != "biotech":
                         elem.clear()
                         continue
 
-                    drug_records.append(self.transform_record(raw))
+                    try:
+                        raw = self._parse_drug_element(elem)
+                        if raw is None:
+                            elem.clear()
+                            continue
 
-                    # Collect target records for this drug
-                    for t in raw.get("_targets", []):
-                        target_records.append(t)
+                        drug_records.append(self.transform_record(raw))
 
-                    drug_count += 1
+                        # Collect target records for this drug
+                        for t in raw.get("_targets", []):
+                            target_records.append(t)
 
-                    # Batch commit every 500 drugs
-                    if len(drug_records) >= self._batch_size:
-                        await self._commit_drug_batch(
-                            session, drug_records, target_records
+                        drug_count += 1
+
+                        # Batch commit every 500 drugs
+                        if len(drug_records) >= self._batch_size:
+                            await self._commit_drug_batch(
+                                session, drug_records, target_records
+                            )
+                            drug_records.clear()
+                            target_records.clear()
+                            logger.info("Processed %d drugs so far...", drug_count)
+
+                    except Exception as exc:
+                        dbid = self._get_text(
+                            elem, f"{DB_NS}drugbank-id[@primary='true']"
                         )
-                        drug_records.clear()
-                        target_records.clear()
-                        logger.info("Processed %d drugs so far...", drug_count)
+                        self.record_error(
+                            "parse_drug_xml", exc, record_id=dbid or "unknown"
+                        )
 
-                except Exception as exc:
-                    dbid = self._get_text(
-                        elem, f"{DB_NS}drugbank-id[@primary='true']"
+                    elem.clear()
+
+                # Final batch
+                if drug_records:
+                    await self._commit_drug_batch(
+                        session, drug_records, target_records
                     )
-                    self.record_error(
-                        "parse_drug_xml", exc, record_id=dbid or "unknown"
-                    )
-
-                elem.clear()
-
-            # Final batch
-            if drug_records:
-                await self._commit_drug_batch(
-                    session, drug_records, target_records
-                )
 
         except Exception as exc:
             self.record_error("xml_parse_fatal", exc)

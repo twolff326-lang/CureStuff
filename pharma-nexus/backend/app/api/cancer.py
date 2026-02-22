@@ -129,7 +129,7 @@ async def get_cancer_type(
     mut_result = await db.execute(
         select(Mutation)
         .where(Mutation.cancer_type_id == cancer_type_id)
-        .order_by(Mutation.frequency_percent.desc().nullslast())
+        .order_by(Mutation.frequency_percent.desc().nulls_last())
         .limit(20)
     )
     top_mutations = mut_result.scalars().all()
@@ -138,7 +138,7 @@ async def get_cancer_type(
     profile_result = await db.execute(
         select(CancerMolecularProfile)
         .where(CancerMolecularProfile.cancer_type_id == cancer_type_id)
-        .order_by(CancerMolecularProfile.frequency_percent.desc().nullslast())
+        .order_by(CancerMolecularProfile.frequency_percent.desc().nulls_last())
         .limit(20)
     )
     top_profiles = profile_result.scalars().all()
@@ -240,7 +240,7 @@ async def get_molecular_profile(
 
     offset = (page - 1) * per_page
     query = (
-        query.order_by(CancerMolecularProfile.frequency_percent.desc().nullslast())
+        query.order_by(CancerMolecularProfile.frequency_percent.desc().nulls_last())
         .offset(offset)
         .limit(per_page)
     )
@@ -317,7 +317,7 @@ async def get_cancer_type_mutations(
 
     offset = (page - 1) * per_page
     query = (
-        query.order_by(Mutation.frequency_percent.desc().nullslast())
+        query.order_by(Mutation.frequency_percent.desc().nulls_last())
         .offset(offset)
         .limit(per_page)
     )
@@ -380,7 +380,7 @@ async def get_gene_cancer_landscape(
         )
         .join(CancerType, Mutation.cancer_type_id == CancerType.id)
         .where(Mutation.gene_symbol == gene_upper)
-        .order_by(Mutation.frequency_percent.desc().nullslast())
+        .order_by(Mutation.frequency_percent.desc().nulls_last())
     )
     mutations = mut_result.all()
 

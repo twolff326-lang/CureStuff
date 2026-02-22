@@ -139,6 +139,7 @@ class ExpressionPreprocessor:
             # Fall back to union with NaN fill
             all_samples = sorted(set.union(*sample_sets))
             common_samples = all_samples
+            logger.warning("No common samples across %d genes; using union with NaN fill (%d samples)", len(all_data), len(all_samples))
 
         genes_ordered = [g for g in gene_symbols if g in all_data]
         matrix = np.full((len(common_samples), len(genes_ordered)), np.nan)

@@ -202,8 +202,9 @@ class ChEMBLConnector(BaseConnector):
 
             # Check if more pages
             offset += PAGE_SIZE
-            total_count = page_meta.get("total_count", 0)
-            if offset >= total_count:
+            total_count = page_meta.get("total_count") or 10_000_000
+            max_pages = 100
+            if offset >= total_count or offset >= max_pages * PAGE_SIZE:
                 break
 
         # Final batch
@@ -382,8 +383,9 @@ class ChEMBLConnector(BaseConnector):
                 bioassay_records.clear()
 
             offset += PAGE_SIZE
-            total_count = page_meta.get("total_count", 0)
-            if offset >= total_count:
+            total_count = page_meta.get("total_count") or 10_000_000
+            max_pages = 100
+            if offset >= total_count or offset >= max_pages * PAGE_SIZE:
                 break
 
         # Final batch of bioassays
@@ -411,6 +413,8 @@ class ChEMBLConnector(BaseConnector):
             if key not in best or value_nm < best[key]:
                 best[key] = value_nm
 
+        updated = 0
+        skipped = 0
         for (drug_id, target_id), affinity in best.items():
             stmt = (
                 update(DrugTarget)
@@ -420,7 +424,16 @@ class ChEMBLConnector(BaseConnector):
                 )
                 .values(binding_affinity_nm=affinity)
             )
-            await session.execute(stmt)
+            result = await session.execute(stmt)
+            if result.rowcount > 0:
+                updated += 1
+            else:
+                skipped += 1
+        if skipped > 0:
+            logger.warning(
+                "Binding affinity update: %d updated, %d skipped (no matching drug-target row)",
+                updated, skipped,
+            )
 
     # ------------------------------------------------------------------
     # Target resolution (ChEMBL target ID -> UniProt ID)

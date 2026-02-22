@@ -578,7 +578,9 @@ class PubMedConnector(BaseConnector):
                         Literature.pmid == record["pmid"]
                     )
                 )
-                lit_id = lit_result.scalar_one()
+                lit_id = lit_result.scalar_one_or_none()
+                if lit_id is None:
+                    continue
 
                 # Create primary junction records
                 if drug_id:

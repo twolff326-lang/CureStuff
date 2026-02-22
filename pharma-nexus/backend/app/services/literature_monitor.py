@@ -32,6 +32,25 @@ class LiteratureMonitor:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _parse_pub_date(date_str: str | None):
+        """Parse a PubMed date string like '2026 Feb 15' or '2026 Feb' into a date."""
+        from datetime import date as _date
+        if not date_str:
+            return None
+        parts = date_str.strip().split()
+        try:
+            year = int(parts[0])
+            month_map = {
+                "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+            }
+            month = month_map.get(parts[1].lower()[:3], 1) if len(parts) > 1 else 1
+            day = int(parts[2]) if len(parts) > 2 else 1
+            return _date(year, month, day)
+        except (ValueError, IndexError):
+            return None
+
     async def check_for_new_literature(
         self,
         days_back: int = 7,
@@ -245,7 +264,7 @@ class LiteratureMonitor:
                 pmid=pmid,
                 title=paper.get("title", ""),
                 journal=paper.get("source", ""),
-                pub_date=datetime.now(timezone.utc).date(),
+                pub_date=self._parse_pub_date(paper.get("pubdate")) or datetime.now(timezone.utc).date(),
                 analysis_status="pending",
             )
             self.db.add(lit)
@@ -367,7 +386,7 @@ class LiteratureMonitor:
 
         alert = LiteratureAlert(
             hypothesis_id=hypothesis.id,
-            alert_type=f"score_{direction.split('d')[0]}se" if delta < 0 else "score_increase",
+            alert_type="score_decrease" if delta < 0 else "score_increase",
             severity=severity,
             title=(
                 f"Score {direction} by {abs_delta:.1f} pts for hypothesis #{hypothesis.id} "

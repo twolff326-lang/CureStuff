@@ -29,6 +29,11 @@ export interface DimensionScores {
   pharmacological_response: number;
 }
 
+export interface DimensionCI {
+  lower: number;
+  upper: number;
+}
+
 export interface Hypothesis {
   id: number;
   drug_id: number;
@@ -38,6 +43,15 @@ export interface Hypothesis {
   composite_score: number;
   evidence_strength: string;
   dimension_scores: DimensionScores;
+  statistical?: {
+    p_value: number | null;
+    fdr_adjusted_p_value: number | null;
+    confidence_interval: { lower: number; upper: number } | null;
+    dimension_confidence_intervals: Record<string, DimensionCI> | null;
+    scoring_method_version: string | null;
+  };
+  batch_id?: string | null;
+  generation_pipeline_run_id?: number | null;
   status: string;
   created_at: string | null;
   updated_at: string | null;
@@ -89,6 +103,10 @@ export interface IngestionLog {
   errors?: unknown[] | null;
   started_at: string;
   completed_at: string | null;
+  data_source_version?: string | null;
+  data_downloaded_at?: string | null;
+  records_filtered?: number | null;
+  duration_seconds?: number | null;
 }
 
 export interface LLMAnalysis {
@@ -268,4 +286,55 @@ export interface TopGene {
   alteration_type: string;
   frequency_percent: number | null;
   expression_zscore: number | null;
+}
+
+// Publication readiness
+export interface ReadinessCheck {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ReadinessResult {
+  generated_at: string;
+  summary: {
+    passed: number;
+    total: number;
+    percentage: number;
+    ready: boolean;
+  };
+  checks: ReadinessCheck[];
+}
+
+export interface SoftwareSnapshot {
+  id: number;
+  pipeline_run_id: number | null;
+  snapshot_label: string;
+  python_version: string;
+  packages: Record<string, string | null>;
+  platform_info: Record<string, string> | null;
+  created_at: string | null;
+}
+
+export interface FairnessStratum {
+  cancer_type?: string;
+  tcga_code?: string;
+  drug_status?: string;
+  hypothesis_count: number;
+  mean_score: number;
+  std_score: number;
+  min_score?: number;
+  max_score?: number;
+}
+
+export interface CompletenessData {
+  generated_at: string;
+  entities: {
+    drugs: { total: number; with_mechanism: number; with_targets: number; mechanism_pct: number };
+    targets: { total: number };
+    cancer_types: { total: number };
+  };
+  dimension_completeness: Record<string, { non_null_count: number; total: number; percentage: number }>;
+  ingestion_freshness: Record<string, { last_ingested: string | null; total_records_ever: number }>;
 }

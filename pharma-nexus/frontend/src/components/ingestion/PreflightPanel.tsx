@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
 
 // ---------------------------------------------------------------
@@ -40,6 +40,7 @@ export default function PreflightPanel() {
   const [running, setRunning] = useState(false);
   const [data, setData] = useState<PreflightResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const lastTotalSourcesRef = useRef<number | null>(null);
 
   const runChecks = async () => {
     setRunning(true);
@@ -51,6 +52,7 @@ export default function PreflightPanel() {
         { method: "POST" },
       );
       setData(res);
+      lastTotalSourcesRef.current = res.summary.total_sources;
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to run preflight checks",
@@ -98,7 +100,7 @@ export default function PreflightPanel() {
       {running && !data && (
         <div className="flex items-center justify-center gap-3 px-5 py-12 text-sm text-slate-400">
           <Spinner />
-          Probing 11 external APIs simultaneously...
+          Probing {lastTotalSourcesRef.current ?? "all"} external APIs simultaneously...
         </div>
       )}
 
