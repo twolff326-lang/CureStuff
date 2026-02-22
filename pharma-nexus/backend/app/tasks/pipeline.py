@@ -117,9 +117,16 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
                 kwargs["min_score"] = config.get("llm_min_score", 0.0)
                 kwargs["limit"] = config.get("llm_limit", 100)
 
-            # Dispatch subtask and wait for completion
+            # Dispatch subtask and wait for completion.
+            # disable_sync_subtasks=False is required because Celery 5.x
+            # raises RuntimeError when calling result.get() inside a task
+            # with the prefork pool.  Our concurrency is 2+ so deadlock
+            # is avoided (orchestrator holds one slot, subtask uses another).
             result = celery_app.send_task(task_name, kwargs=kwargs)
-            task_result = result.get(timeout=43200)  # 12h max per phase
+            task_result = result.get(
+                timeout=43200,  # 12h max per phase
+                disable_sync_subtasks=False,
+            )
 
             # Mark phase completed
             phases = _get_pipeline_phases(run_id) or []
