@@ -186,14 +186,20 @@ export default function PipelinePage() {
       await fetchApi(`/api/pipeline/cancel/${activeRun.id}`, {
         method: "POST",
       });
-      // Poll one more time to pick up the cancelled state
-      const data = await fetchApi<PipelineRunStatus>(
-        `/api/pipeline/status/${activeRun.id}`
-      );
-      setActiveRun(data);
+      // Stop polling immediately so stale callbacks don't overwrite state.
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
+      }
+      // Fetch the final cancelled state.
+      try {
+        const data = await fetchApi<PipelineRunStatus>(
+          `/api/pipeline/status/${activeRun.id}`
+        );
+        setActiveRun(data);
+      } catch {
+        // Status fetch failed — mark as cancelled locally so UI updates.
+        setActiveRun({ ...activeRun, status: "cancelled" });
       }
       loadHistory();
     } catch (e: unknown) {

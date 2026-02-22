@@ -180,6 +180,7 @@ async def cancel_current_pipeline(
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.status == "running")
+        .with_for_update(skip_locked=True)
         .limit(1)
     )
     run = result.scalar_one_or_none()
@@ -202,7 +203,9 @@ async def cancel_pipeline_run(
     Marks the run and any pending phases as cancelled so a new run can start.
     """
     result = await db.execute(
-        select(PipelineRun).where(PipelineRun.id == run_id)
+        select(PipelineRun)
+        .where(PipelineRun.id == run_id)
+        .with_for_update(skip_locked=True)
     )
     run = result.scalar_one_or_none()
     if not run:
@@ -231,7 +234,10 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
     run.completed_at = datetime.now(timezone.utc)
     run.phases = phases
     flag_modified(run, "phases")
-    # No explicit commit — get_db auto-commits after the handler returns.
+
+    # Commit BEFORE revoking the Celery task so the orchestrator sees
+    # status="cancelled" when it checks the DB after receiving SIGTERM.
+    await db.commit()
 
     # Revoke the Celery orchestrator task so it stops between phases.
     task_id = (run.config or {}).get("_celery_task_id")

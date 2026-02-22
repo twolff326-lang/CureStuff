@@ -180,7 +180,14 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
             # If the run was cancelled while this phase was executing,
             # the cancel endpoint already set the correct DB state.
             # Do not overwrite "cancelled" with "failed".
-            current_status = _get_run_status(run_id)
+            try:
+                current_status = _get_run_status(run_id)
+            except Exception:
+                logger.warning(
+                    "Pipeline run %d: could not read status from DB during error handler",
+                    run_id,
+                )
+                current_status = None
             if current_status == "cancelled":
                 logger.info(
                     "Pipeline run %d: phase '%s' raised after cancellation, skipping failure update",
