@@ -48,7 +48,11 @@ def _update_pipeline_run(run_id, **fields):
             )
             await session.commit()
 
-    run_async(_do())
+    try:
+        run_async(_do())
+    except Exception:
+        logger.exception("Failed to update pipeline_runs (run_id=%d)", run_id)
+        raise
 
 
 def _get_pipeline_phases(run_id):
@@ -93,15 +97,21 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
     )
 
     for phase_idx, (phase_key, phase_label, task_name) in enumerate(phases_to_run):
-        # Mark this phase as running
-        phases = _get_pipeline_phases(run_id) or []
-        for p in phases:
-            if p["key"] == phase_key:
-                p["status"] = "running"
-                p["started_at"] = datetime.now(timezone.utc).isoformat()
-                break
-
-        _update_pipeline_run(run_id, current_phase=phase_key, phases=phases)
+        # Mark this phase as running — guard against None to avoid
+        # overwriting the phases column with an empty list.
+        phases = _get_pipeline_phases(run_id)
+        if not phases:
+            logger.error(
+                "Pipeline run %d: could not read phases from DB, skipping status update",
+                run_id,
+            )
+        else:
+            for p in phases:
+                if p["key"] == phase_key:
+                    p["status"] = "running"
+                    p["started_at"] = datetime.now(timezone.utc).isoformat()
+                    break
+            _update_pipeline_run(run_id, current_phase=phase_key, phases=phases)
 
         logger.info(
             "Pipeline run %d: starting phase '%s' (%d/%d)",
@@ -117,19 +127,27 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
                 kwargs["min_score"] = config.get("llm_min_score", 0.0)
                 kwargs["limit"] = config.get("llm_limit", 100)
 
-            # Dispatch subtask and wait for completion
+            # Dispatch subtask and wait for completion.
+            # disable_sync_subtasks=False is required because Celery 5.x
+            # raises RuntimeError when calling result.get() inside a task
+            # with the prefork pool.  Our concurrency is 2+ so deadlock
+            # is avoided (orchestrator holds one slot, subtask uses another).
             result = celery_app.send_task(task_name, kwargs=kwargs)
-            task_result = result.get(timeout=43200)  # 12h max per phase
+            task_result = result.get(
+                timeout=43200,  # 12h max per phase
+                disable_sync_subtasks=False,
+            )
 
             # Mark phase completed
-            phases = _get_pipeline_phases(run_id) or []
-            for p in phases:
-                if p["key"] == phase_key:
-                    p["status"] = "completed"
-                    p["completed_at"] = datetime.now(timezone.utc).isoformat()
-                    p["result"] = _safe_result(task_result)
-                    break
-            _update_pipeline_run(run_id, phases=phases)
+            phases = _get_pipeline_phases(run_id)
+            if phases:
+                for p in phases:
+                    if p["key"] == phase_key:
+                        p["status"] = "completed"
+                        p["completed_at"] = datetime.now(timezone.utc).isoformat()
+                        p["result"] = _safe_result(task_result)
+                        break
+                _update_pipeline_run(run_id, phases=phases)
 
             logger.info("Pipeline run %d: phase '%s' completed", run_id, phase_key)
 
@@ -140,28 +158,30 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
             )
 
             # Mark phase as failed
-            phases = _get_pipeline_phases(run_id) or []
-            for p in phases:
-                if p["key"] == phase_key:
-                    p["status"] = "failed"
-                    p["completed_at"] = datetime.now(timezone.utc).isoformat()
-                    p["error"] = str(exc)[:2000]
-                    p["traceback"] = traceback.format_exc()[-2000:]
-                    break
-
-            # Mark remaining phases as skipped
-            remaining_keys = {pk for pk, _, _ in phases_to_run[phase_idx + 1:]}
-            for p in phases:
-                if p["key"] in remaining_keys:
-                    p["status"] = "skipped"
-
-            _update_pipeline_run(
-                run_id,
+            phases = _get_pipeline_phases(run_id)
+            fail_fields = dict(
                 status="failed",
                 current_phase=phase_key,
-                phases=phases,
                 completed_at=datetime.now(timezone.utc),
             )
+            if phases:
+                for p in phases:
+                    if p["key"] == phase_key:
+                        p["status"] = "failed"
+                        p["completed_at"] = datetime.now(timezone.utc).isoformat()
+                        p["error"] = str(exc)[:2000]
+                        p["traceback"] = traceback.format_exc()[-2000:]
+                        break
+
+                # Mark remaining phases as skipped
+                remaining_keys = {pk for pk, _, _ in phases_to_run[phase_idx + 1:]}
+                for p in phases:
+                    if p["key"] in remaining_keys:
+                        p["status"] = "skipped"
+
+                fail_fields["phases"] = phases
+
+            _update_pipeline_run(run_id, **fail_fields)
             return {
                 "status": "failed",
                 "failed_phase": phase_key,
