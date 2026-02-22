@@ -34,7 +34,8 @@ class ScoringWeight(Base):
     #   "safety": 0.10,
     #   "novelty": 0.15,
     # }
-    is_default = Column(Integer, default=0, nullable=False)  # 1 = active default
+    is_default = Column(Integer, default=0, nullable=False,
+                        comment="Integer flag: 1 = active default preset, 0 = inactive")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

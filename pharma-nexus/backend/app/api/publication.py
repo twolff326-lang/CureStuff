@@ -291,8 +291,9 @@ async def generate_methods_section(db: AsyncSession = Depends(get_db)):
         select(func.count(CombinationHypothesis.id))
     )).scalar() or 0
 
-    # Score distribution
-    score_stats = (await db.execute(
+    # Score distribution — percentile_cont() returns NULL on empty tables,
+    # so guard against None before accessing individual elements.
+    score_stats_row = (await db.execute(
         select(
             func.avg(Hypothesis.composite_score),
             func.stddev(Hypothesis.composite_score),
@@ -304,6 +305,13 @@ async def generate_methods_section(db: AsyncSession = Depends(get_db)):
             func.percentile_cont(0.95).within_group(Hypothesis.composite_score),
         )
     )).first()
+
+    # When the table is empty, all aggregates return NULL.  Normalise to
+    # a safe sentinel so downstream code never indexes into None.
+    if score_stats_row is None or score_stats_row[0] is None:
+        score_stats = None
+    else:
+        score_stats = score_stats_row
 
     strength_counts = dict(
         (await db.execute(

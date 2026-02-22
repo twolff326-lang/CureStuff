@@ -66,12 +66,12 @@ export default function AnalysisPage() {
   const triggerPipeline = async (endpoint: string, label: string) => {
     setTaskStatus(`Starting ${label}...`);
     try {
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = { source: endpoint };
       if (selectedCancer) body.cancer_type_id = selectedCancer;
 
       await fetchApi(`/api/ingestion/start`, {
         method: "POST",
-        body: JSON.stringify({ source: endpoint }),
+        body: JSON.stringify(body),
       });
       setTaskStatus(`${label} queued successfully.`);
       setTimeout(() => setTaskStatus(null), 5000);

@@ -14,9 +14,11 @@ Each phase updates the pipeline_runs table so the frontend can poll progress.
 """
 
 import logging
+import traceback
 from datetime import datetime, timezone
 
 from app.tasks.celery_app import celery_app
+from app.tasks.utils import run_async
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,6 @@ PIPELINE_PHASES = [
 
 def _update_pipeline_run(run_id, **fields):
     """Update a pipeline_runs row synchronously (used from Celery worker)."""
-    import asyncio
     from sqlalchemy import update
     from app.tasks.utils import task_session
     from app.models.pipeline_run import PipelineRun
@@ -47,16 +48,11 @@ def _update_pipeline_run(run_id, **fields):
             )
             await session.commit()
 
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_do())
-    finally:
-        loop.close()
+    run_async(_do())
 
 
 def _get_pipeline_phases(run_id):
     """Read the current phases JSON from a pipeline run."""
-    import asyncio
     from sqlalchemy import select
     from app.tasks.utils import task_session
     from app.models.pipeline_run import PipelineRun
@@ -68,11 +64,7 @@ def _get_pipeline_phases(run_id):
             )
             return result.scalar_one_or_none()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_do())
-    finally:
-        loop.close()
+    return run_async(_do())
 
 
 @celery_app.task(name="app.tasks.pipeline.run_full_pipeline")
@@ -153,7 +145,8 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
                 if p["key"] == phase_key:
                     p["status"] = "failed"
                     p["completed_at"] = datetime.now(timezone.utc).isoformat()
-                    p["error"] = str(exc)[:500]
+                    p["error"] = str(exc)[:2000]
+                    p["traceback"] = traceback.format_exc()[-2000:]
                     break
 
             # Mark remaining phases as skipped
@@ -172,7 +165,8 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
             return {
                 "status": "failed",
                 "failed_phase": phase_key,
-                "error": str(exc)[:500],
+                "error": str(exc)[:2000],
+                "traceback": traceback.format_exc()[-2000:],
             }
 
     # All phases completed

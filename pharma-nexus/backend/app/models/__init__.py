@@ -3,7 +3,7 @@ from app.models.target import Target, ProteinInteraction
 from app.models.pathway import Pathway, PathwayTarget
 from app.models.cancer_type import CancerType, CancerMolecularProfile
 from app.models.mutation import Mutation
-from app.models.hypothesis import Hypothesis, HypothesisEvidence
+from app.models.hypothesis import Hypothesis, HypothesisEvidence, ValidationResult
 from app.models.evidence import Bioassay, GeneExpression
 from app.models.literature import Literature, LiteratureTarget, LiteratureCancer
 from app.models.clinical_trial import ClinicalTrial
@@ -12,6 +12,9 @@ from app.models.expression_cache import ExpressionScoreCache
 from app.models.scoring_config import ScoringWeight
 from app.models.llm_analysis import HypothesisAnalysis, LLMUsageLog
 from app.models.gene_dependency import GeneDependency, CombinationHypothesis
+from app.models.gnn_prediction import GNNTrainingRun, GNNPrediction
+from app.models.tallula import TallulaRun, TallulaDiscovery
+from app.models.literature_alert import ScoreHistory, LiteratureAlert, MonitoringConfig
 from app.models.pipeline_run import PipelineRun
 from app.models.software_version import SoftwareVersion
 
@@ -27,6 +30,7 @@ __all__ = [
     "Mutation",
     "Hypothesis",
     "HypothesisEvidence",
+    "ValidationResult",
     "Bioassay",
     "GeneExpression",
     "Literature",
@@ -42,6 +46,13 @@ __all__ = [
     "LLMUsageLog",
     "GeneDependency",
     "CombinationHypothesis",
+    "GNNTrainingRun",
+    "GNNPrediction",
+    "TallulaRun",
+    "TallulaDiscovery",
+    "ScoreHistory",
+    "LiteratureAlert",
+    "MonitoringConfig",
     "PipelineRun",
     "SoftwareVersion",
 ]

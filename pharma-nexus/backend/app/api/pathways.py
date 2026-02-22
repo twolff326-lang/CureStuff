@@ -141,21 +141,21 @@ async def get_pathway_genes(
 
     genes = row[0] or []
 
-    # Check which genes have targets in our database
+    # Batch-load all targets at once (avoids N+1 per-gene queries)
+    target_results = await db.execute(
+        select(Target).where(Target.gene_symbol.in_(genes))
+    )
+    targets_by_symbol = {t.gene_symbol: t for t in target_results.scalars().all()}
+
     gene_details = []
     for gene_sym in genes:
-        target_result = await db.execute(
-            select(Target.id, Target.uniprot_id, Target.protein_class).where(
-                Target.gene_symbol == gene_sym
-            )
-        )
-        target_row = target_result.one_or_none()
+        target = targets_by_symbol.get(gene_sym)
         gene_details.append({
             "gene_symbol": gene_sym,
-            "has_target": target_row is not None,
-            "target_id": target_row[0] if target_row else None,
-            "uniprot_id": target_row[1] if target_row else None,
-            "protein_class": target_row[2] if target_row else None,
+            "has_target": target is not None,
+            "target_id": target.id if target else None,
+            "uniprot_id": target.uniprot_id if target else None,
+            "protein_class": target.protein_class if target else None,
         })
 
     return {

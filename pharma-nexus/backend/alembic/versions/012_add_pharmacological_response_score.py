@@ -4,8 +4,8 @@ Stores the PRISM/GDSC drug sensitivity screen score (0-100) for each
 drug-cancer hypothesis. This dimension measures direct pharmacological
 response evidence from cancer cell line viability screens.
 
-Revision ID: 011
-Revises: 010
+Revision ID: 012
+Revises: 011
 Create Date: 2026-02-20
 """
 
@@ -13,8 +13,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-revision = "011"
-down_revision = "010"
+revision = "012"
+down_revision = "011"
 branch_labels = None
 depends_on = None
 

@@ -110,7 +110,7 @@ async def get_drug_literature(
     )
     if mention_type:
         count_q = count_q.where(LiteratureDrug.mention_type == mention_type)
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar() or 0
 
     offset = (page - 1) * page_size
     result = await session.execute(query.offset(offset).limit(page_size))
@@ -154,7 +154,7 @@ async def get_cancer_literature(
     )
     if mention_type:
         count_q = count_q.where(LiteratureCancer.mention_type == mention_type)
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar() or 0
 
     offset = (page - 1) * page_size
     result = await session.execute(query.offset(offset).limit(page_size))

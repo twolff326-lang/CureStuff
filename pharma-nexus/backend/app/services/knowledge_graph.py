@@ -60,9 +60,13 @@ class KnowledgeGraphService:
         total = 0
         for i in range(0, len(items), BATCH_SIZE):
             batch = items[i : i + BATCH_SIZE]
-            async with self.driver.session() as session:
-                await session.run(query, {param_name: batch})
-            total += len(batch)
+            try:
+                async with self.driver.session() as session:
+                    await session.run(query, {param_name: batch})
+                total += len(batch)
+            except Exception:
+                logger.error("Neo4j batch write failed at offset %d/%d", i, len(items))
+                raise
         return total
 
     # ==================================================================

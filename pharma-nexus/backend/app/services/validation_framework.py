@@ -883,6 +883,11 @@ class ValidationFramework:
                     "clinical_evidence": {"score": h.clinical_evidence_score or 0},
                     "safety": {"score": h.safety_score or 0},
                     "novelty": {"score": h.novelty_score or 0},
+                    "causal_dependency": {"score": h.causal_dependency_score or 0},
+                    "gnn_link": {"score": h.gnn_link_score or 0},
+                    "mutation_context": {"score": h.mutation_context_score or 0},
+                    "polypharmacology": {"score": h.polypharmacology_score or 0},
+                    "pharmacological_response": {"score": h.pharmacological_response_score or 0},
                 }
                 # Zero out the ablated dimension
                 dim_scores[dim] = {"score": 0}

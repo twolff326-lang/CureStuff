@@ -81,7 +81,7 @@ def fishers_exact_pathway(
     # Fold enrichment: observed overlap / expected overlap
     if pathway_size > 0 and total_genome_size > 0:
         expected = (drug_targets_in_pathway * cancer_genes_in_pathway) / pathway_size
-        fold_enrichment = a / expected if expected > 0 else 0.0
+        fold_enrichment = a / max(expected, 1e-10)
     else:
         fold_enrichment = 0.0
 

@@ -40,7 +40,7 @@ async def get_drug_trials(
         query = query.where(ClinicalTrial.phase == phase)
         count_q = count_q.where(ClinicalTrial.phase == phase)
 
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar() or 0
     offset = (page - 1) * page_size
     result = await session.execute(
         query.order_by(desc(ClinicalTrial.start_date)).offset(offset).limit(page_size)
@@ -105,7 +105,7 @@ async def get_cancer_trials(
         query = query.where(ClinicalTrial.phase == phase)
         count_q = count_q.where(ClinicalTrial.phase == phase)
 
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar() or 0
 
     result = await session.execute(
         query.order_by(desc(ClinicalTrial.start_date))
@@ -166,7 +166,7 @@ async def search_trials(
         query = query.where(ClinicalTrial.phase == phase)
         count_q = count_q.where(ClinicalTrial.phase == phase)
 
-    total = (await session.execute(count_q)).scalar_one()
+    total = (await session.execute(count_q)).scalar() or 0
     offset = (page - 1) * page_size
     result = await session.execute(
         query.order_by(desc(ClinicalTrial.start_date)).offset(offset).limit(page_size)

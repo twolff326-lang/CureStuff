@@ -268,7 +268,9 @@ class ClinicalTrialsConnector(BaseConnector):
                         ClinicalTrial.nct_id == record["nct_id"]
                     )
                 )
-                trial_db_id = trial_result.scalar_one()
+                trial_db_id = trial_result.scalar_one_or_none()
+                if trial_db_id is None:
+                    continue
 
                 # Link trial to drug
                 td_stmt = pg_insert(TrialDrug.__table__).values(

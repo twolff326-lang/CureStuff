@@ -78,6 +78,7 @@ class ExpressionAnalyzer:
             tumor_vals = np.array(data["tumor"], dtype=np.float64)
 
             if len(tumor_vals) < 3:
+                logger.debug("Skipping gene %s: only %d tumor samples (need >= 3)", gene, len(tumor_vals))
                 continue
 
             normal_vals = np.array(data["normal"], dtype=np.float64)

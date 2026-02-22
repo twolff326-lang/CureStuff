@@ -62,7 +62,7 @@ def parse_kegg_flat_file(text: str) -> dict[str, Any]:
     for line in text.split("\n"):
         if line.startswith("///"):
             break
-        if not line.strip():
+        if not line or not line.strip():
             continue
 
         # Check if this is a section header (starts at column 1, not with space)
