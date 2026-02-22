@@ -163,25 +163,6 @@ async def get_pipeline_status(
     }
 
 
-@router.post("/cancel/{run_id}")
-async def cancel_pipeline_run(
-    run_id: int,
-    db: AsyncSession = Depends(get_db),
-):
-    """Cancel a running pipeline by ID.
-
-    Marks the run and any pending phases as cancelled so a new run can start.
-    """
-    result = await db.execute(
-        select(PipelineRun).where(PipelineRun.id == run_id)
-    )
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Pipeline run not found")
-
-    return await _cancel_run(run, db)
-
-
 @router.post("/cancel")
 async def cancel_current_pipeline(
     db: AsyncSession = Depends(get_db),
@@ -201,6 +182,25 @@ async def cancel_current_pipeline(
             status_code=404,
             detail="No running pipeline found",
         )
+
+    return await _cancel_run(run, db)
+
+
+@router.post("/cancel/{run_id}")
+async def cancel_pipeline_run(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a running pipeline by ID.
+
+    Marks the run and any pending phases as cancelled so a new run can start.
+    """
+    result = await db.execute(
+        select(PipelineRun).where(PipelineRun.id == run_id)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
 
     return await _cancel_run(run, db)
 
