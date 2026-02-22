@@ -196,7 +196,7 @@ async def cancel_current_pipeline(
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.status == "running")
-        .with_for_update(skip_locked=True)
+        .with_for_update()
         .limit(1)
     )
     run = result.scalar_one_or_none()
@@ -221,7 +221,7 @@ async def cancel_pipeline_run(
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.id == run_id)
-        .with_for_update(skip_locked=True)
+        .with_for_update()
     )
     run = result.scalar_one_or_none()
     if not run:
