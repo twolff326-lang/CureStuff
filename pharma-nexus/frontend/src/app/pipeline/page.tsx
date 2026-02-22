@@ -84,6 +84,7 @@ export default function PipelinePage() {
   /* -- active run -------------------------------------------------- */
   const [activeRun, setActiveRun] = useState<PipelineRunStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollGenRef = useRef(0);
   const mountedRef = useRef(true);
 
   /* -- history ----------------------------------------------------- */
@@ -138,12 +139,16 @@ export default function PipelinePage() {
   const pollRun = (runId: number) => {
     if (pollRef.current) clearInterval(pollRef.current);
 
+    const gen = ++pollGenRef.current;
+
     const poll = async () => {
       try {
         const data = await fetchApi<PipelineRunStatus>(
           `/api/pipeline/status/${runId}`
         );
         if (!mountedRef.current) return;
+        // Discard stale response if a cancel or new run bumped the generation.
+        if (pollGenRef.current !== gen) return;
         setActiveRun(data);
         if (data.status !== "running") {
           if (pollRef.current) clearInterval(pollRef.current);
@@ -186,7 +191,8 @@ export default function PipelinePage() {
       await fetchApi(`/api/pipeline/cancel/${activeRun.id}`, {
         method: "POST",
       });
-      // Stop polling immediately so stale callbacks don't overwrite state.
+      // Bump generation so any in-flight poll responses are discarded.
+      pollGenRef.current++;
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
