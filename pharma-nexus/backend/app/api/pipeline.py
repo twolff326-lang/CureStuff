@@ -130,6 +130,11 @@ async def start_pipeline(
         },
     )
 
+    # Store the Celery task ID so the cancel endpoint can revoke it.
+    run.config = {**config, "_celery_task_id": task.id}
+    flag_modified(run, "config")
+    await db.commit()
+
     logger.info("Pipeline run %d started (task=%s, phases=%s)", run_id, task.id, enabled_phases)
 
     return {
@@ -227,6 +232,15 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
     run.phases = phases
     flag_modified(run, "phases")
     # No explicit commit — get_db auto-commits after the handler returns.
+
+    # Revoke the Celery orchestrator task so it stops between phases.
+    task_id = (run.config or {}).get("_celery_task_id")
+    if task_id:
+        try:
+            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+            logger.info("Revoked Celery task %s for pipeline run %d", task_id, run.id)
+        except Exception as exc:
+            logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
 
     logger.info("Pipeline run %d cancelled", run.id)
     return {"run_id": run.id, "status": "cancelled"}

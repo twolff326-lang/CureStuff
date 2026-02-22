@@ -71,6 +71,22 @@ def _get_pipeline_phases(run_id):
     return run_async(_do())
 
 
+def _get_run_status(run_id):
+    """Read the current status of a pipeline run."""
+    from sqlalchemy import select
+    from app.tasks.utils import task_session
+    from app.models.pipeline_run import PipelineRun
+
+    async def _do():
+        async with task_session() as session:
+            result = await session.execute(
+                select(PipelineRun.status).where(PipelineRun.id == run_id)
+            )
+            return result.scalar_one_or_none()
+
+    return run_async(_do())
+
+
 @celery_app.task(name="app.tasks.pipeline.run_full_pipeline")
 def run_full_pipeline(run_id, enabled_phases=None, config=None):
     """Execute the full drug repurposing pipeline.
@@ -97,6 +113,15 @@ def run_full_pipeline(run_id, enabled_phases=None, config=None):
     )
 
     for phase_idx, (phase_key, phase_label, task_name) in enumerate(phases_to_run):
+        # Check if the run was cancelled before starting this phase.
+        current_status = _get_run_status(run_id)
+        if current_status != "running":
+            logger.info(
+                "Pipeline run %d: status is '%s', stopping before phase '%s'",
+                run_id, current_status, phase_key,
+            )
+            return {"status": current_status, "stopped_before": phase_key}
+
         # Mark this phase as running — guard against None to avoid
         # overwriting the phases column with an empty list.
         phases = _get_pipeline_phases(run_id)
