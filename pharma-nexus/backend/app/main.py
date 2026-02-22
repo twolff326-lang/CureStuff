@@ -85,7 +85,33 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
         start = time.perf_counter()
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Starlette's exception handler middleware re-raises exceptions
+            # after sending the error response. Catching here prevents
+            # the exception from escaping the ASGI boundary and producing
+            # spurious "Exception in ASGI application" log entries.
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error": "internal_error",
+                    "message": "Internal server error",
+                    "request_id": request_id,
+                },
+            )
+            response.headers["X-Request-ID"] = request_id
+            response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
+            logger.info(
+                "%s %s -> %s (%sms) [%s]",
+                request.method,
+                request.url.path,
+                500,
+                elapsed_ms,
+                request_id,
+            )
+            return response
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         response.headers["X-Request-ID"] = request_id
