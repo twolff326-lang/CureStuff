@@ -36,8 +36,8 @@ def upgrade() -> None:
                 index=True,
             ),
             sa.Column("current_phase", sa.String(100), nullable=True),
-            sa.Column("phases", JSONB(), nullable=False, server_default="'[]'::jsonb"),
-            sa.Column("config", JSONB(), nullable=False, server_default="'{}'::jsonb"),
+            sa.Column("phases", JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+            sa.Column("config", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
             sa.Column(
                 "started_at",
                 sa.DateTime(),
