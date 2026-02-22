@@ -1,10 +1,13 @@
 """Fix alembic_version table to match migration files on disk.
 
-Handles two known issues:
+Handles three known issues:
 1. Revision '001_initial' must be renamed to '001' (ID mismatch).
-2. The DB may reference a revision that no longer exists on disk
-   (e.g. '011'). In that case, stamp back to the latest known
-   migration so `alembic upgrade head` can proceed.
+2. The DB may reference a revision that no longer exists on disk.
+   In that case, stamp to the latest known migration.
+3. The DB version may lag behind the actual schema (e.g. version says
+   '008' but tables from migration 012 already exist).  Detect this by
+   probing for schema objects created by later migrations and stamp
+   forward so Alembic doesn't try to replay already-applied DDL.
 
 Safe to run repeatedly.
 """
@@ -33,6 +36,40 @@ KNOWN_REVISIONS = {
     "010", "011", "012", "013",
 }
 
+# Schema probes: if the DB has schema objects from later migrations,
+# the alembic_version must be stamped forward.  Each entry maps a
+# minimum revision to a SQL probe that returns a truthy row when the
+# DDL from that migration is already present.
+SCHEMA_PROBES = [
+    (
+        "013",
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_name = 'pipeline_runs'",
+    ),
+    (
+        "012",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'hypotheses' "
+        "AND column_name = 'pharmacological_response_score'",
+    ),
+    (
+        "011",
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_name = 'gnn_training_runs'",
+    ),
+    (
+        "010",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'ingestion_logs' "
+        "AND column_name = 'total_expected'",
+    ),
+    (
+        "009",
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_name = 'gene_dependencies'",
+    ),
+]
+
 try:
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
@@ -58,6 +95,28 @@ try:
         )
         print(f"fix_alembic_version: stamped {old} -> {LATEST_REVISION} "
               f"(revision {old} not found on disk)")
+        row = (LATEST_REVISION,)
+
+    # 3) Detect version-behind-schema: the version claims an older
+    #    revision but the schema already has objects from later ones.
+    if row:
+        current = row[0]
+        detected = current
+        for rev, probe in SCHEMA_PROBES:
+            if rev <= current:
+                # Already at or past this revision; skip.
+                continue
+            cur.execute(probe)
+            if cur.fetchone():
+                detected = max(detected, rev)
+
+        if detected != current:
+            cur.execute(
+                "UPDATE alembic_version SET version_num = %s",
+                (detected,),
+            )
+            print(f"fix_alembic_version: stamped {current} -> {detected} "
+                  f"(schema already contains objects from {detected})")
 
     cur.close()
     conn.close()
