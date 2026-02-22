@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models.pipeline_run import PipelineRun
@@ -213,8 +214,9 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
             detail=f"Pipeline run {run.id} is already '{run.status}'",
         )
 
-    # Mark pending/running phases as cancelled
-    phases = run.phases or []
+    # Mark pending/running phases as cancelled.
+    # Deep-copy the list so SQLAlchemy sees a new object for the JSONB column.
+    phases = [dict(p) for p in (run.phases or [])]
     for p in phases:
         if p.get("status") in ("pending", "running"):
             p["status"] = "cancelled"
@@ -223,7 +225,8 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
     run.current_phase = None
     run.completed_at = datetime.now(timezone.utc)
     run.phases = phases
-    await db.commit()
+    flag_modified(run, "phases")
+    # No explicit commit — get_db auto-commits after the handler returns.
 
     logger.info("Pipeline run %d cancelled", run.id)
     return {"run_id": run.id, "status": "cancelled"}
