@@ -299,8 +299,8 @@ export default function TallulaPage() {
           {summaryData.length > 0 && (
             <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-700 mb-3">
-                Discovery Classification ({result.parameters.n_hypotheses_input}{" "}
-                hypotheses, {result.parameters.n_lenses} lenses)
+                Discovery Classification ({result.parameters?.n_hypotheses_input ?? "N/A"}{" "}
+                hypotheses, {result.parameters?.n_lenses ?? "N/A"} lenses)
               </h3>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={summaryData} margin={{ left: 10, right: 10 }}>

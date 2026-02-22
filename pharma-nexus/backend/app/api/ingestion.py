@@ -609,7 +609,16 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
         report["celery"] = {"error": str(exc)}
 
     # 2. Truncate all PostgreSQL tables --------------------------------
+    # Safety: _ALL_TABLES is a hardcoded constant defined in this module
+    # (not derived from user input), so the f-string in the TRUNCATE
+    # statement is safe from SQL injection.  The validation below is a
+    # defence-in-depth check to ensure table names contain only
+    # alphanumeric characters and underscores.
     try:
+        import re
+        for t in _ALL_TABLES:
+            if not re.fullmatch(r"[a-z_][a-z0-9_]*", t):
+                raise ValueError(f"Invalid table name in _ALL_TABLES: {t!r}")
         table_list = ", ".join(_ALL_TABLES)
         result = await db.execute(
             text(f"TRUNCATE TABLE {table_list} CASCADE")
@@ -625,14 +634,14 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
         report["postgres"] = {"error": str(exc)}
 
     # 3. Flush Redis (all 3 logical databases) -------------------------
+    from urllib.parse import urlparse, urlunparse
+
     redis_dbs_flushed: list[int] = []
     for db_index in (0, 1, 2):
         try:
-            r = aioredis.from_url(
-                f"redis://{settings.redis_url.split('@')[-1].split('/')[0]}/{db_index}"
-                if "@" in settings.redis_url
-                else settings.redis_url.rsplit("/", 1)[0] + f"/{db_index}",
-            )
+            parsed = urlparse(settings.redis_url)
+            redis_url = urlunparse(parsed._replace(path=f"/{db_index}"))
+            r = aioredis.from_url(redis_url)
             await r.flushdb()
             await r.aclose()
             redis_dbs_flushed.append(db_index)
