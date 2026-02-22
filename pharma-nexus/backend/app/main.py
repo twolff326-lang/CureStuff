@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
 from app.api import (
@@ -81,23 +81,40 @@ app = FastAPI(
 # Middleware: Request ID + timing
 # ---------------------------------------------------------------------------
 
-class RequestContextMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+class RequestContextMiddleware:
+    """Pure ASGI middleware — no BaseHTTPMiddleware, no exception re-raising."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Extract request-id from headers (ASGI headers are bytes pairs).
+        raw_headers = dict(scope.get("headers", []))
+        request_id = (
+            raw_headers.get(b"x-request-id", b"").decode() or str(uuid.uuid4())[:8]
+        )
         start = time.perf_counter()
+        status_code = 500
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                headers = list(message.get("headers", []))
+                headers.append((b"x-request-id", request_id.encode()))
+                headers.append((b"x-response-time", f"{elapsed_ms}ms".encode()))
+                message = {**message, "headers": headers}
+            await send(message)
 
         try:
-            response = await call_next(request)
-        except StarletteHTTPException as exc:
-            # BaseHTTPMiddleware re-raises HTTPExceptions after
-            # ExceptionMiddleware already handled them.  Return the
-            # correct status so callers see 404/409/etc., not 500.
-            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-            response = JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-            )
+            await self.app(scope, receive, send_wrapper)
         except Exception:
+            # If the inner stack truly raises (nothing handled it), send 500.
             elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
             response = JSONResponse(
                 status_code=500,
@@ -106,34 +123,26 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     "message": "Internal server error",
                     "request_id": request_id,
                 },
+                headers={
+                    "X-Request-ID": request_id,
+                    "X-Response-Time": f"{elapsed_ms}ms",
+                },
             )
-            response.headers["X-Request-ID"] = request_id
-            response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
+            await response(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path != "/health":
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            method = scope.get("method", "")
             logger.info(
                 "%s %s -> %s (%sms) [%s]",
-                request.method,
-                request.url.path,
-                500,
+                method,
+                path,
+                status_code,
                 elapsed_ms,
                 request_id,
             )
-            return response
-
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        response.headers["X-Request-ID"] = request_id
-        response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
-
-        if request.url.path != "/health":
-            logger.info(
-                "%s %s -> %s (%sms) [%s]",
-                request.method,
-                request.url.path,
-                response.status_code,
-                elapsed_ms,
-                request_id,
-            )
-
-        return response
 
 
 app.add_middleware(RequestContextMiddleware)
