@@ -7,6 +7,7 @@ Endpoints:
   GET  /api/pipeline/phases    — List available pipeline phases
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -251,15 +252,20 @@ async def _cancel_run(run: PipelineRun, db: AsyncSession):
     run.phases = phases
     flag_modified(run, "phases")
 
+    # Read task_id before the commit to avoid any post-commit session issues.
+    task_id = (run.config or {}).get("_celery_task_id")
+
     # Commit BEFORE revoking the Celery task so the orchestrator sees
     # status="cancelled" when it checks the DB after receiving SIGTERM.
     await db.commit()
 
     # Revoke the Celery orchestrator task so it stops between phases.
-    task_id = (run.config or {}).get("_celery_task_id")
+    # Run in a thread so the synchronous Redis call doesn't block the loop.
     if task_id:
         try:
-            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+            await asyncio.to_thread(
+                celery_app.control.revoke, task_id, terminate=True, signal="SIGTERM",
+            )
             logger.info("Revoked Celery task %s for pipeline run %d", task_id, run.id)
         except Exception as exc:
             logger.warning("Failed to revoke Celery task %s: %s", task_id, exc)
