@@ -167,10 +167,18 @@ class COSMICConnector(BaseConnector):
 
     async def _annotate_known_drivers(self, session: AsyncSession) -> int:
         """Annotate mutations for known cancer driver genes."""
+        await self.set_total_expected(session, len(KNOWN_CANCER_DRIVERS))
+
         processed = 0
 
         # Mark known driver mutations
-        processed += await self._mark_driver_genes(session, KNOWN_CANCER_DRIVERS)
+        marked = await self._mark_driver_genes(session, KNOWN_CANCER_DRIVERS)
+        processed += marked
+        if marked == 0:
+            logger.warning(
+                "COSMIC: 0 mutations marked as drivers — cBioPortal/TCGA "
+                "ingestion must run first to populate the mutations table"
+            )
 
         # Create driver profiles from the known list
         gene_records = [
@@ -186,9 +194,17 @@ class COSMICConnector(BaseConnector):
             }
             for gene in KNOWN_CANCER_DRIVERS
         ]
-        processed += await self._create_driver_profiles(session, gene_records)
+        profiles = await self._create_driver_profiles(session, gene_records)
+        processed += profiles
+        if profiles == 0:
+            logger.warning(
+                "COSMIC: 0 driver profiles created — ensure cancer types "
+                "and mutations exist (run cBioPortal + TCGA ingestion first)"
+            )
 
         await session.commit()
+        self._records_processed = processed
+        await self._flush_progress(session)
         return processed
 
     # ------------------------------------------------------------------

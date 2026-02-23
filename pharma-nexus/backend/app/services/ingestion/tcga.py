@@ -73,9 +73,14 @@ class TCGAConnector(BaseConnector):
             logger.info("Phase 1 complete: %d TCGA projects mapped", len(ct_map))
 
             processed = len(ct_map)
+            total_projects = len(ct_map)
+
+            await self.set_total_expected(session, total_projects)
+            self._records_processed = 0
+            await self._flush_progress(session)
 
             # Phase 2: Top mutated genes per project
-            for project_id, ct_id in ct_map.items():
+            for idx, (project_id, ct_id) in enumerate(ct_map.items(), 1):
                 try:
                     mut_count = await self._fetch_top_mutations(
                         client, session, project_id, ct_id
@@ -88,7 +93,12 @@ class TCGAConnector(BaseConnector):
                     )
                     await session.rollback()
 
+                self._records_processed = idx
+                if idx % 5 == 0:
+                    await self._flush_progress(session)
+
             self._records_processed = processed
+            await self._flush_progress(session)
             return []
 
         finally:

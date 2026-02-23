@@ -198,7 +198,7 @@ class KEGGConnector(BaseConnector):
             processed = 0
 
             # Phase 2: Fetch detail for each pathway
-            for pathway_id, pathway_name in pathway_list:
+            for idx, (pathway_id, pathway_name) in enumerate(pathway_list, 1):
                 try:
                     count = await self._fetch_pathway_detail(
                         client, session, pathway_id, pathway_name, target_cache
@@ -209,8 +209,14 @@ class KEGGConnector(BaseConnector):
                         f"pathway_{pathway_id}", exc, record_id=pathway_id
                     )
 
+                # Flush progress every 10 pathways
+                self._records_processed = idx
+                if idx % 10 == 0:
+                    await self._flush_progress(session)
+
             await session.commit()
-            self._records_processed = processed
+            self._records_processed = len(pathway_list)
+            await self._flush_progress(session)
             return []
 
         finally:

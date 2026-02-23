@@ -60,5 +60,5 @@ class PathwayTarget(Base):
     target = relationship("Target", back_populates="pathway_targets")
 
     __table_args__ = (
-        Index("ix_pathway_targets_pathway_target", "pathway_id", "target_id"),
+        Index("ix_pathway_targets_pathway_target", "pathway_id", "target_id", unique=True),
     )

@@ -75,7 +75,10 @@ class ReactomeConnector(BaseConnector):
             top_pathways = await self._fetch_top_level_pathways(client)
             logger.info("Found %d top-level Reactome pathways", len(top_pathways))
 
-            for tp in top_pathways:
+            # total_expected: top-level trees + Phase 2/3 will update later
+            await self.set_total_expected(session, len(top_pathways))
+
+            for idx, tp in enumerate(top_pathways, 1):
                 try:
                     count = await self._process_pathway_tree(
                         client, session, tp, parent_db_id=None
@@ -89,17 +92,30 @@ class ReactomeConnector(BaseConnector):
                     )
                     await session.rollback()
 
+                self._records_processed = idx
+                if idx % 5 == 0:
+                    await self._flush_progress(session)
+
+            phase1_count = processed
+            self._records_processed = phase1_count
+            await self._flush_progress(session)
+            logger.info("Phase 1 complete: %d pathway records created", phase1_count)
+
             # Phase 2: Bulk UniProt→Reactome mapping
             pathway_genes = await self._fetch_uniprot_mapping(client, session)
+            total_pairs = sum(len(genes) for genes in pathway_genes.values())
             logger.info(
-                "UniProt2Reactome mapping: %d pathway-gene pairs",
-                sum(len(genes) for genes in pathway_genes.values()),
+                "UniProt2Reactome mapping: %d pathway-gene pairs", total_pairs,
             )
 
-            # Update pathway records with gene lists
-            for stId, genes_info in pathway_genes.items():
+            # Update total_expected to include pathway_targets work
+            await self.set_total_expected(
+                session, phase1_count + len(pathway_genes),
+            )
+
+            # Update pathway records with gene lists + create pathway_targets
+            for idx, (stId, genes_info) in enumerate(pathway_genes.items(), 1):
                 gene_symbols = list({g["gene_symbol"] for g in genes_info if g.get("gene_symbol")})
-                uniprot_ids = list({g["uniprot_id"] for g in genes_info if g.get("uniprot_id")})
 
                 # Update pathway genes JSONB
                 result = await session.execute(
@@ -113,9 +129,9 @@ class ReactomeConnector(BaseConnector):
                     continue
 
                 # Update genes array
-                from sqlalchemy import update
+                from sqlalchemy import update as sa_update
                 await session.execute(
-                    update(Pathway)
+                    sa_update(Pathway)
                     .where(Pathway.id == db_pathway_id)
                     .values(genes=gene_symbols)
                 )
@@ -148,8 +164,14 @@ class ReactomeConnector(BaseConnector):
                     )
                     processed += len(pt_records)
 
+                # Flush progress every 50 pathways in Phase 2/3
+                self._records_processed = phase1_count + idx
+                if idx % 50 == 0:
+                    await self._flush_progress(session)
+
             await session.commit()
             self._records_processed = processed
+            await self._flush_progress(session)
             return []
 
         finally:

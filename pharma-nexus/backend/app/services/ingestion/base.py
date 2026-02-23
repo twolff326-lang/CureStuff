@@ -197,8 +197,6 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
-            self._records_processed = total
-            await self._flush_progress(session)
 
         return total
 
@@ -239,8 +237,6 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
-            self._records_processed = total
-            await self._flush_progress(session)
 
         return total
 
@@ -262,8 +258,6 @@ class BaseConnector(ABC):
             await session.execute(stmt)
             await session.flush()
             total += len(batch)
-            self._records_processed = total
-            await self._flush_progress(session)
 
         return total
 
