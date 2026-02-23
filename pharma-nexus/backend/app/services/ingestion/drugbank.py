@@ -439,7 +439,7 @@ class DrugBankConnector(BaseConnector):
         await self.set_total_expected(session, len(FALLBACK_DRUGS))
 
         try:
-            for drug_name in FALLBACK_DRUGS:
+            for idx, drug_name in enumerate(FALLBACK_DRUGS, 1):
                 try:
                     record = await self._fetch_pubchem_compound(
                         client, drug_name
@@ -450,6 +450,11 @@ class DrugBankConnector(BaseConnector):
                     self.record_error(
                         "pubchem_fallback_fetch", exc, record_id=drug_name
                     )
+
+                # Flush progress every 10 drugs so the UI shows live counts
+                if idx % 10 == 0:
+                    self._records_processed = len(drug_records)
+                    await self._flush_progress(session)
 
             # Batch upsert all
             if drug_records:
