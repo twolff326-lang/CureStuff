@@ -97,6 +97,8 @@ export default function DataSourcesPage() {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetResult, setResetResult] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [resetDetails, setResetDetails] = useState<Record<string, any> | null>(null);
 
   // Track whether any source is currently running so we can poll faster
   const anyRunning = Object.values(statuses).some(
@@ -178,14 +180,27 @@ export default function DataSourcesPage() {
     setResetting(true);
     setError(null);
     setResetResult(null);
+    setResetDetails(null);
     try {
-      const data = await fetchApi<{ status: string; details: Record<string, unknown> }>(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await fetchApi<{ status: string; details: Record<string, any> }>(
         "/api/ingestion/reset-all",
         { method: "POST" },
       );
-      setResetResult("All data wiped successfully.");
+      setResetDetails(data.details);
+
+      if (data.status === "reset_complete") {
+        setResetResult("All data wiped successfully.");
+      } else if (data.status === "reset_partial") {
+        setResetResult("Reset partially succeeded — some subsystems reported errors. See details below.");
+      } else if (data.status === "reset_failed") {
+        setError("Database wipe FAILED — tables were not cleared. See details below.");
+      } else {
+        setResetResult(`Reset returned status: ${data.status}`);
+      }
+
       setResetConfirmOpen(false);
-      // Refresh UI to reflect empty state
+      // Refresh UI to reflect new state
       await fetchStatus();
       await fetchLogs();
     } catch (err) {
@@ -407,6 +422,11 @@ export default function DataSourcesPage() {
           </div>
         )}
 
+        {/* Diagnostic details panel — shows full API response */}
+        {resetDetails && (
+          <ResetDetailsPanel details={resetDetails} />
+        )}
+
         {!resetConfirmOpen ? (
           <button
             onClick={() => setResetConfirmOpen(true)}
@@ -437,6 +457,103 @@ export default function DataSourcesPage() {
               </button>
             </div>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Reset diagnostics panel
+// ---------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ResetDetailsPanel({ details }: { details: Record<string, any> }) {
+  const pg = details.postgres ?? {};
+  const celery = details.celery ?? {};
+  const redis = details.redis ?? {};
+  const neo4j = details.neo4j ?? {};
+
+  return (
+    <div className="mb-4 rounded-md border border-slate-300 bg-white p-4 text-xs">
+      <h3 className="text-sm font-semibold text-slate-700 mb-3">
+        Reset Diagnostics
+      </h3>
+
+      {/* PostgreSQL */}
+      <div className="mb-3">
+        <p className="font-semibold text-slate-600 mb-1">PostgreSQL</p>
+        {pg.error ? (
+          <p className="text-red-600 font-mono bg-red-50 px-2 py-1 rounded">
+            ERROR: {pg.error}
+          </p>
+        ) : (
+          <>
+            <p className="text-green-700">
+              Truncated: {pg.count ?? 0} table(s)
+            </p>
+            {pg.tables_skipped_not_found?.length > 0 && (
+              <p className="text-amber-600 mt-1">
+                Skipped (not in DB):{" "}
+                <span className="font-mono">
+                  {pg.tables_skipped_not_found.join(", ")}
+                </span>
+              </p>
+            )}
+            {pg.tables_failed && Object.keys(pg.tables_failed).length > 0 && (
+              <div className="mt-1">
+                <p className="text-red-600 font-semibold">Failed tables:</p>
+                {Object.entries(pg.tables_failed).map(([table, err]) => (
+                  <p key={table} className="text-red-500 font-mono ml-2">
+                    {table}: {String(err)}
+                  </p>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Celery */}
+      <div className="mb-3">
+        <p className="font-semibold text-slate-600 mb-1">Celery</p>
+        {celery.error ? (
+          <p className="text-amber-600 font-mono bg-amber-50 px-2 py-1 rounded">
+            {celery.error}
+          </p>
+        ) : (
+          <p className="text-green-700">
+            Tasks revoked: {celery.tasks_revoked ?? 0}, Queues purged:{" "}
+            {celery.queues_purged ? "yes" : "no"}
+          </p>
+        )}
+      </div>
+
+      {/* Redis */}
+      <div className="mb-3">
+        <p className="font-semibold text-slate-600 mb-1">Redis</p>
+        {redis.error ? (
+          <p className="text-amber-600 font-mono bg-amber-50 px-2 py-1 rounded">
+            {redis.error}
+          </p>
+        ) : (
+          <p className="text-green-700">
+            Databases flushed: {(redis.databases_flushed ?? []).join(", ") || "none"}
+          </p>
+        )}
+      </div>
+
+      {/* Neo4j */}
+      <div>
+        <p className="font-semibold text-slate-600 mb-1">Neo4j</p>
+        {neo4j.error ? (
+          <p className="text-amber-600 font-mono bg-amber-50 px-2 py-1 rounded">
+            {neo4j.error}
+          </p>
+        ) : (
+          <p className="text-green-700">
+            Nodes deleted: {neo4j.nodes_deleted ?? 0}
+          </p>
         )}
       </div>
     </div>
