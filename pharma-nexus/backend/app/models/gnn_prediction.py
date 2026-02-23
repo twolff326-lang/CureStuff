@@ -46,8 +46,8 @@ class GNNTrainingRun(Base):
     # Full training summary
     training_summary = Column(JSONB, default=dict)
 
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    completed_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_gnn_runs_created", "created_at"),

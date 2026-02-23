@@ -14,5 +14,5 @@ class PipelineRun(Base):
     current_phase = Column(String(100), nullable=True)
     phases = Column(JSONB, nullable=False, default=list)
     config = Column(JSONB, nullable=False, default=dict)
-    started_at = Column(DateTime, server_default=func.now(), nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
