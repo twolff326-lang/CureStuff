@@ -15,6 +15,8 @@ Tasks (LLM analysis):
 
 import logging
 
+from celery import chain
+
 from app.tasks.celery_app import celery_app
 from app.tasks.utils import run_async
 
@@ -286,8 +288,8 @@ def compute_pathway_activities(self, cancer_type_id=None):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(name="app.tasks.analyze.run_full_expression_analysis")
-def run_full_expression_analysis(cancer_type_id=None):
+@celery_app.task(bind=True, name="app.tasks.analyze.run_full_expression_analysis")
+def run_full_expression_analysis(self, cancer_type_id=None):
     """Run the complete expression analysis pipeline:
 
     1. Differential expression for all cancer types
@@ -296,33 +298,18 @@ def run_full_expression_analysis(cancer_type_id=None):
 
     This is the main "analysis" trigger that prepares all expression
     data needed by the hypothesis engine.
+
+    Uses self.replace() to express the workflow as a Celery chain,
+    avoiding synchronous .get() calls that deadlock the prefork pool.
     """
     logger.info("Starting full expression analysis pipeline")
 
-    # Step 1: Differential expression
-    de_result = compute_all_differential_expression.apply(
-        kwargs={"cancer_type_id": cancer_type_id}
+    workflow = chain(
+        compute_all_differential_expression.si(cancer_type_id=cancer_type_id),
+        compute_drug_expression_scores.si(cancer_type_id=cancer_type_id),
+        compute_pathway_activities.si(cancer_type_id=cancer_type_id),
     )
-    de_result.get(timeout=7200)  # 2h timeout
-
-    # Step 2: Drug expression scores
-    drug_result = compute_drug_expression_scores.apply(
-        kwargs={"cancer_type_id": cancer_type_id}
-    )
-    drug_result.get(timeout=14400)  # 4h timeout
-
-    # Step 3: Pathway activities
-    pathway_result = compute_pathway_activities.apply(
-        kwargs={"cancer_type_id": cancer_type_id}
-    )
-    pathway_result.get(timeout=14400)  # 4h timeout
-
-    return {
-        "status": "completed",
-        "de_task_id": de_result.id,
-        "drug_scoring_task_id": drug_result.id,
-        "pathway_activity_task_id": pathway_result.id,
-    }
+    raise self.replace(workflow)
 
 
 # ------------------------------------------------------------------
