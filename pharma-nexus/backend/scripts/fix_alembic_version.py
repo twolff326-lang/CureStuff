@@ -28,12 +28,12 @@ if not dsn:
 dsn = dsn.replace("postgresql+psycopg2://", "postgresql://")
 
 # Stamp to latest known migration when the DB has an unknown revision.
-LATEST_REVISION = "013"
+LATEST_REVISION = "015"
 
 # All valid revision IDs in the migration chain.
 KNOWN_REVISIONS = {
     "001", "002", "003", "004", "005", "006", "007", "008", "009",
-    "010", "011", "012", "013",
+    "010", "011", "012", "013", "014", "015",
 }
 
 # Schema probes: if the DB has schema objects from later migrations,
@@ -41,6 +41,19 @@ KNOWN_REVISIONS = {
 # minimum revision to a SQL probe that returns a truthy row when the
 # DDL from that migration is already present.
 SCHEMA_PROBES = [
+    (
+        "015",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'ingestion_logs' "
+        "AND column_name = 'data_source_version'",
+    ),
+    (
+        "014",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'ingestion_logs' "
+        "AND column_name = 'started_at' "
+        "AND data_type = 'timestamp with time zone'",
+    ),
     (
         "013",
         "SELECT 1 FROM information_schema.tables "
