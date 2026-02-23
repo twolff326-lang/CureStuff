@@ -24,8 +24,8 @@ class IngestionLog(Base):
     records_processed = Column(Integer, default=0)
     total_expected = Column(Integer, nullable=True)
     errors = Column(JSONB, default=list)
-    started_at = Column(DateTime, server_default=func.now(), nullable=False)
-    completed_at = Column(DateTime)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
 
     # Data source versioning — tracks exactly which version of external data
     # was used so results are reproducible for publication.
@@ -34,7 +34,7 @@ class IngestionLog(Base):
         comment="External data source version (e.g. ChEMBL v33, PubChem 2025-02-20)",
     )
     data_downloaded_at = Column(
-        DateTime, nullable=True,
+        DateTime(timezone=True), nullable=True,
         comment="Timestamp when the external data was actually retrieved",
     )
     api_url = Column(
