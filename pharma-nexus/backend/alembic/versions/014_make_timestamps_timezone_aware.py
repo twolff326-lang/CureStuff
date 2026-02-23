@@ -15,115 +15,38 @@ Create Date: 2026-02-23
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 revision = "014"
 down_revision = "013"
 branch_labels = None
 depends_on = None
 
+# Raw SQL is used here instead of op.alter_column() to avoid rendering
+# issues with existing_server_default=func.now() across Alembic versions.
+
+_UPGRADE_COLUMNS = [
+    ("pipeline_runs", "started_at"),
+    ("pipeline_runs", "completed_at"),
+    ("ingestion_logs", "started_at"),
+    ("ingestion_logs", "completed_at"),
+    ("ingestion_logs", "data_downloaded_at"),
+    ("gnn_training_runs", "created_at"),
+    ("gnn_training_runs", "completed_at"),
+]
+
 
 def upgrade() -> None:
-    # pipeline_runs
-    op.alter_column(
-        "pipeline_runs", "started_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "pipeline_runs", "completed_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_nullable=True,
-    )
-
-    # ingestion_logs
-    op.alter_column(
-        "ingestion_logs", "started_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "ingestion_logs", "completed_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "ingestion_logs", "data_downloaded_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_nullable=True,
-    )
-
-    # gnn_training_runs
-    op.alter_column(
-        "gnn_training_runs", "created_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
-    op.alter_column(
-        "gnn_training_runs", "completed_at",
-        type_=sa.DateTime(timezone=True),
-        existing_type=sa.DateTime(),
-        existing_nullable=True,
-    )
+    for table, column in _UPGRADE_COLUMNS:
+        op.execute(
+            f"ALTER TABLE {table} ALTER COLUMN {column}"
+            f" TYPE TIMESTAMP WITH TIME ZONE"
+            f" USING {column} AT TIME ZONE 'UTC'"
+        )
 
 
 def downgrade() -> None:
-    # gnn_training_runs
-    op.alter_column(
-        "gnn_training_runs", "completed_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "gnn_training_runs", "created_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
-
-    # ingestion_logs
-    op.alter_column(
-        "ingestion_logs", "data_downloaded_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "ingestion_logs", "completed_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "ingestion_logs", "started_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
-
-    # pipeline_runs
-    op.alter_column(
-        "pipeline_runs", "completed_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "pipeline_runs", "started_at",
-        type_=sa.DateTime(),
-        existing_type=sa.DateTime(timezone=True),
-        existing_server_default=sa.func.now(),
-        existing_nullable=False,
-    )
+    for table, column in _UPGRADE_COLUMNS:
+        op.execute(
+            f"ALTER TABLE {table} ALTER COLUMN {column}"
+            f" TYPE TIMESTAMP WITHOUT TIME ZONE"
+        )
