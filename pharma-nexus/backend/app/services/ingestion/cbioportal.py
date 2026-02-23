@@ -80,12 +80,14 @@ class CBioPortalConnector(BaseConnector):
             # Cache molecular profile IDs per study
             await self._cache_molecular_profiles(client, studies)
 
-            processed = len(cancer_type_map)
+            total_studies = len(cancer_type_map)
+            await self.set_total_expected(session, total_studies)
+            processed = total_studies
 
             # Phase 2–4: Process each cancer type
-            for study_id, ct_id in cancer_type_map.items():
+            for idx, (study_id, ct_id) in enumerate(cancer_type_map.items(), 1):
                 tcga_code = study_id.replace("_tcga", "").upper()
-                logger.info("Processing cancer type: %s (study=%s)", tcga_code, study_id)
+                logger.info("Processing cancer type: %s (study=%s) [%d/%d]", tcga_code, study_id, idx, total_studies)
 
                 try:
                     # Phase 2: Mutations
@@ -114,7 +116,12 @@ class CBioPortalConnector(BaseConnector):
                     )
                     await session.rollback()
 
+                # Flush progress after each study
+                self._records_processed = idx
+                await self._flush_progress(session)
+
             self._records_processed = processed
+            await self._flush_progress(session)
             return []  # Already stored inline
 
         finally:
@@ -341,15 +348,20 @@ class CBioPortalConnector(BaseConnector):
                 "source": "cbioportal",
             })
 
-        count = await self.batch_upsert_composite(
-            session,
-            Mutation,
-            mutation_records,
-            conflict_columns=["cancer_type_id", "gene_symbol"],
-            update_columns=[
-                "mutation_type", "protein_change", "genomic_position",
-                "frequency_percent", "functional_impact", "source",
-            ],
+        # The mutations table has no unique constraint on
+        # (cancer_type_id, gene_symbol) — multiple sources and protein
+        # changes coexist.  Delete existing cBioPortal data for this
+        # cancer type, then bulk-insert fresh records.
+        from sqlalchemy import delete
+        await session.execute(
+            delete(Mutation).where(
+                Mutation.cancer_type_id == cancer_type_id,
+                Mutation.source == "cbioportal",
+            )
+        )
+
+        count = await self.batch_insert_no_conflict(
+            session, Mutation, mutation_records,
         )
         logger.info(
             "%s: stored %d mutations (from %d raw)",
