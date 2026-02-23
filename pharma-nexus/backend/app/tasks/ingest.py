@@ -9,7 +9,7 @@ Each task:
 
 import logging
 
-from celery import chain, chord
+from celery import chord
 
 from app.tasks.celery_app import celery_app
 from app.tasks.utils import run_async, task_session
@@ -89,26 +89,33 @@ def ingest_chembl(self):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(bind=True, name="app.tasks.ingest.ingest_all_drugs")
-def ingest_all_drugs(self, xml_path=None):
+@celery_app.task(name="app.tasks.ingest.ingest_all_drugs")
+def ingest_all_drugs(xml_path=None):
     """Run all drug ingestion tasks: DrugBank first, then PubChem + ChEMBL in parallel.
 
     DrugBank runs first because PubChem and ChEMBL enrich existing drug records.
     After DrugBank completes, PubChem and ChEMBL run in parallel.
-
-    Uses self.replace() to express the workflow as a Celery chain/chord,
-    avoiding synchronous .get() calls that deadlock the prefork pool.
     """
     logger.info("Starting full drug ingestion pipeline")
 
-    workflow = chain(
-        ingest_drugbank.si(xml_path=xml_path),
-        chord(
-            [ingest_pubchem.si(), ingest_chembl.si()],
-            _drug_ingestion_complete.s(),
-        ),
+    # Run DrugBank first (other sources depend on these records existing).
+    # disable_sync_subtasks=False is required because Celery 5.x raises
+    # RuntimeError when calling result.get() inside a task with the prefork
+    # pool.  The worker must have concurrency >= 4 to avoid deadlock.
+    drugbank_result = ingest_drugbank.apply(kwargs={"xml_path": xml_path})
+    drugbank_result.get(timeout=3600, disable_sync_subtasks=False)
+
+    # Then run PubChem and ChEMBL in parallel via chord
+    parallel_tasks = chord(
+        [ingest_pubchem.s(), ingest_chembl.s()],
+        _drug_ingestion_complete.s(),
     )
-    raise self.replace(workflow)
+    result = parallel_tasks.apply_async()
+    return {
+        "status": "pipeline_started",
+        "drugbank_task_id": drugbank_result.id,
+        "parallel_task_id": result.id,
+    }
 
 
 @celery_app.task(name="app.tasks.ingest.drug_ingestion_complete")
@@ -251,30 +258,34 @@ def ingest_prism(self, data_dir=None):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(bind=True, name="app.tasks.ingest.ingest_all_cancer_data")
-def ingest_all_cancer_data(self, census_tsv_path=None):
+@celery_app.task(name="app.tasks.ingest.ingest_all_cancer_data")
+def ingest_all_cancer_data(census_tsv_path=None):
     """Run all cancer data ingestion: cBioPortal first, then TCGA + COSMIC in parallel.
 
     cBioPortal runs first because it creates the cancer_types records that
     TCGA and COSMIC depend on. After cBioPortal completes, TCGA and COSMIC
     run in parallel via chord.
-
-    Uses self.replace() to express the workflow as a Celery chain/chord,
-    avoiding synchronous .get() calls that deadlock the prefork pool.
     """
     logger.info("Starting full cancer data ingestion pipeline")
 
-    workflow = chain(
-        ingest_cbioportal.si(),
-        chord(
-            [
-                ingest_tcga.si(),
-                ingest_cosmic.si(census_tsv_path=census_tsv_path),
-            ],
-            _cancer_ingestion_complete.s(),
-        ),
+    # cBioPortal first (creates cancer types + primary mutation/expression data)
+    cbio_result = ingest_cbioportal.apply()
+    cbio_result.get(timeout=7200, disable_sync_subtasks=False)
+
+    # Then TCGA and COSMIC in parallel
+    parallel_tasks = chord(
+        [
+            ingest_tcga.s(),
+            ingest_cosmic.s(census_tsv_path=census_tsv_path),
+        ],
+        _cancer_ingestion_complete.s(),
     )
-    raise self.replace(workflow)
+    result = parallel_tasks.apply_async()
+    return {
+        "status": "pipeline_started",
+        "cbioportal_task_id": cbio_result.id,
+        "parallel_task_id": result.id,
+    }
 
 
 @celery_app.task(name="app.tasks.ingest.cancer_ingestion_complete")
@@ -387,8 +398,8 @@ def ingest_opentargets(self):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(bind=True, name="app.tasks.ingest.ingest_all_pathways")
-def ingest_all_pathways(self):
+@celery_app.task(name="app.tasks.ingest.ingest_all_pathways")
+def ingest_all_pathways():
     """Run all pathway/interaction ingestion.
 
     Order matters:
@@ -396,22 +407,36 @@ def ingest_all_pathways(self):
     2. KEGG + Reactome in parallel (pathways)
     3. STRING (needs complete target list)
     4. OpenTargets (needs Ensembl IDs from UniProt)
-
-    Uses self.replace() to express the workflow as a Celery chain/chord,
-    avoiding synchronous .get() calls that deadlock the prefork pool.
     """
     logger.info("Starting full pathway/interaction ingestion pipeline")
 
-    workflow = chain(
-        ingest_uniprot.si(),
-        chord(
-            [ingest_kegg.si(), ingest_reactome.si()],
-            _pathway_phase_complete.s(),
-        ),
-        ingest_string.si(),
-        ingest_opentargets.si(),
+    # Step 1: UniProt enrichment first
+    uniprot_result = ingest_uniprot.apply()
+    uniprot_result.get(timeout=3600, disable_sync_subtasks=False)
+
+    # Step 2: KEGG + Reactome in parallel
+    pathway_tasks = chord(
+        [ingest_kegg.s(), ingest_reactome.s()],
+        _pathway_phase_complete.s(),
     )
-    raise self.replace(workflow)
+    pathway_result = pathway_tasks.apply_async()
+    pathway_result.get(timeout=7200, disable_sync_subtasks=False)
+
+    # Step 3: STRING interactions
+    string_result = ingest_string.apply()
+    string_result.get(timeout=3600, disable_sync_subtasks=False)
+
+    # Step 4: OpenTargets (needs Ensembl IDs from step 1)
+    ot_result = ingest_opentargets.apply()
+    ot_result.get(timeout=3600, disable_sync_subtasks=False)
+
+    return {
+        "status": "completed",
+        "uniprot_task_id": uniprot_result.id,
+        "pathway_task_id": pathway_result.id,
+        "string_task_id": string_result.id,
+        "opentargets_task_id": ot_result.id,
+    }
 
 
 @celery_app.task(name="app.tasks.ingest.pathway_phase_complete")
@@ -558,27 +583,40 @@ def analyze_literature_batch(self, pmid_list=None, limit=1000):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(bind=True, name="app.tasks.ingest.ingest_all_literature")
-def ingest_all_literature(self):
+@celery_app.task(name="app.tasks.ingest.ingest_all_literature")
+def ingest_all_literature():
     """Run full literature pipeline:
 
     1. PubMed ingestion (all 3 phases)
     2. ClinicalTrials.gov ingestion
     3. Embedding generation
     4. Abstract analysis (top 1000 most relevant papers)
-
-    Uses self.replace() to express the workflow as a Celery chain,
-    avoiding synchronous .get() calls that deadlock the prefork pool.
     """
     logger.info("Starting full literature ingestion pipeline")
 
-    workflow = chain(
-        ingest_literature.si(),
-        ingest_clinical_trials.si(),
-        generate_embeddings.si(),
-        analyze_literature_batch.si(limit=1000),
-    )
-    raise self.replace(workflow)
+    # Step 1: PubMed literature
+    lit_result = ingest_literature.apply()
+    lit_result.get(timeout=43200, disable_sync_subtasks=False)
+
+    # Step 2: Clinical trials
+    ct_result = ingest_clinical_trials.apply()
+    ct_result.get(timeout=7200, disable_sync_subtasks=False)
+
+    # Step 3: Embeddings
+    emb_result = generate_embeddings.apply()
+    emb_result.get(timeout=3600, disable_sync_subtasks=False)
+
+    # Step 4: Analyze top 1000 papers
+    analysis_result = analyze_literature_batch.apply(kwargs={"limit": 1000})
+    analysis_result.get(timeout=7200, disable_sync_subtasks=False)
+
+    return {
+        "status": "completed",
+        "literature_task_id": lit_result.id,
+        "clinical_trials_task_id": ct_result.id,
+        "embeddings_task_id": emb_result.id,
+        "analysis_task_id": analysis_result.id,
+    }
 
 
 @celery_app.task(name="app.tasks.ingest.literature_pipeline_complete")
