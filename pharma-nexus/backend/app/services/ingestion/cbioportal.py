@@ -54,6 +54,8 @@ class CBioPortalConnector(BaseConnector):
         }
         # Cache study → molecular profiles
         self._profile_cache: dict[str, dict[str, str]] = {}
+        # Cache study → sample IDs (avoids 3x fetch per study)
+        self._sample_cache: dict[str, list[str]] = {}
 
     def get_source_name(self) -> str:
         return "cbioportal"
@@ -591,7 +593,9 @@ class CBioPortalConnector(BaseConnector):
     async def _get_sample_ids(
         self, client: httpx.AsyncClient, study_id: str
     ) -> list[str]:
-        """Fetch all sample IDs for a study."""
+        """Fetch all sample IDs for a study (cached per study)."""
+        if study_id in self._sample_cache:
+            return self._sample_cache[study_id]
         try:
             resp = await self.http_get(
                 client,
@@ -600,7 +604,9 @@ class CBioPortalConnector(BaseConnector):
                 headers=self._headers,
             )
             samples = resp.json()
-            return [s["sampleId"] for s in samples]
+            ids = [s["sampleId"] for s in samples]
+            self._sample_cache[study_id] = ids
+            return ids
         except Exception as exc:
             self.record_error(f"samples_{study_id}", exc, record_id=study_id)
             return []

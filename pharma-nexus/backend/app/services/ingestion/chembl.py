@@ -190,7 +190,14 @@ class ChEMBLConnector(BaseConnector):
                         record_id=mech.get("molecule_chembl_id", "unknown"),
                     )
 
-            # Flush progress after each page so the UI updates
+                # Flush progress every 50 mechanisms — each mechanism
+                # makes 2+ HTTP calls at 2 req/sec, so a full page of
+                # 500 takes ~500s.  Flushing every 50 keeps the UI alive.
+                if total_fetched % 50 == 0:
+                    self._records_processed = total_fetched
+                    await self._flush_progress(session)
+
+            # Flush at end of page as well
             self._records_processed = total_fetched
             await self._flush_progress(session)
 
