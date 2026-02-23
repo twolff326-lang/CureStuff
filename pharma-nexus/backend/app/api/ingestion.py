@@ -663,24 +663,70 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
     # statement is safe from SQL injection.  The validation below is a
     # defence-in-depth check to ensure table names contain only
     # alphanumeric characters and underscores.
+    import re
+    for t in _ALL_TABLES:
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", t):
+            raise ValueError(f"Invalid table name in _ALL_TABLES: {t!r}")
+
+    # First, discover which tables actually exist in the database so we
+    # don't fail the entire operation because of a missing table.
     try:
-        import re
-        for t in _ALL_TABLES:
-            if not re.fullmatch(r"[a-z_][a-z0-9_]*", t):
-                raise ValueError(f"Invalid table name in _ALL_TABLES: {t!r}")
-        table_list = ", ".join(_ALL_TABLES)
-        result = await db.execute(
-            text(f"TRUNCATE TABLE {table_list} CASCADE")
+        existing_result = await db.execute(
+            text(
+                "SELECT tablename FROM pg_catalog.pg_tables "
+                "WHERE schemaname = 'public'"
+            )
         )
-        await db.commit()
-        report["postgres"] = {
-            "tables_truncated": _ALL_TABLES,
-            "count": len(_ALL_TABLES),
-        }
+        existing_tables = {row[0] for row in existing_result.fetchall()}
     except Exception as exc:
-        await db.rollback()
-        logger.error("PostgreSQL truncate failed: %s", exc)
-        report["postgres"] = {"error": str(exc)}
+        logger.error("Failed to query existing tables: %s", exc)
+        existing_tables = set(_ALL_TABLES)  # fall back to attempting all
+
+    tables_to_truncate = [t for t in _ALL_TABLES if t in existing_tables]
+    skipped_tables = [t for t in _ALL_TABLES if t not in existing_tables]
+
+    if skipped_tables:
+        logger.warning(
+            "Tables not found in database (skipping): %s", skipped_tables
+        )
+
+    truncated: list[str] = []
+    failed: dict[str, str] = {}
+
+    if tables_to_truncate:
+        try:
+            table_list = ", ".join(tables_to_truncate)
+            await db.execute(
+                text(f"TRUNCATE TABLE {table_list} CASCADE")
+            )
+            await db.commit()
+            truncated = tables_to_truncate
+        except Exception as exc:
+            await db.rollback()
+            logger.warning(
+                "Bulk TRUNCATE failed (%s), falling back to per-table truncation",
+                exc,
+            )
+            # Fall back: truncate each table individually so one bad table
+            # doesn't prevent the rest from being cleared.
+            for t in tables_to_truncate:
+                try:
+                    await db.execute(
+                        text(f"TRUNCATE TABLE {t} CASCADE")
+                    )
+                    await db.commit()
+                    truncated.append(t)
+                except Exception as table_exc:
+                    await db.rollback()
+                    failed[t] = str(table_exc)
+                    logger.error("TRUNCATE %s failed: %s", t, table_exc)
+
+    report["postgres"] = {
+        "tables_truncated": truncated,
+        "count": len(truncated),
+        "tables_skipped_not_found": skipped_tables,
+        "tables_failed": failed,
+    }
 
     # 3. Flush Redis (all 3 logical databases) -------------------------
     from urllib.parse import urlparse, urlunparse
@@ -716,5 +762,24 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
         logger.warning("Neo4j clear failed: %s", exc)
         report["neo4j"] = {"error": str(exc)}
 
-    logger.info("Kill switch activated — full reset complete: %s", report)
-    return {"status": "reset_complete", "details": report}
+    # Determine overall status based on whether critical steps succeeded.
+    pg_info = report.get("postgres", {})
+    pg_ok = pg_info.get("count", 0) > 0 and not pg_info.get("tables_failed")
+    has_errors = (
+        "error" in report.get("celery", {})
+        or not pg_ok
+        or "error" in report.get("redis", {})
+        or "error" in report.get("neo4j", {})
+    )
+
+    if not pg_ok:
+        status = "reset_failed"
+        logger.error("Kill switch: PostgreSQL wipe FAILED — %s", report)
+    elif has_errors:
+        status = "reset_partial"
+        logger.warning("Kill switch: partial success — %s", report)
+    else:
+        status = "reset_complete"
+        logger.info("Kill switch activated — full reset complete: %s", report)
+
+    return {"status": status, "details": report}
