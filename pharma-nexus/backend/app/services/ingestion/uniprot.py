@@ -93,6 +93,20 @@ class UniProtConnector(BaseConnector):
             targets = result.all()
             logger.info("Enriching %d targets with UniProt data", len(targets))
 
+            if not targets:
+                self.record_error(
+                    "no_targets",
+                    RuntimeError(
+                        "No targets with UniProt IDs found in the database. "
+                        "UniProt enrichment requires targets from ChEMBL or "
+                        "another connector to run first. Ensure the drug "
+                        "ingestion pipeline (DrugBank + ChEMBL) completes "
+                        "before running UniProt."
+                    ),
+                )
+                self._records_processed = 0
+                return []
+
             await self.set_total_expected(session, len(targets))
 
             processed = 0
@@ -116,6 +130,9 @@ class UniProtConnector(BaseConnector):
                         f"batch_{i}", exc,
                         record_id=f"batch_{i}-{i+UNIPROT_BATCH_SIZE}",
                     )
+
+                self._records_processed = min(i + UNIPROT_BATCH_SIZE, len(uniprot_ids))
+                await self._flush_progress(session)
 
             await session.commit()
 

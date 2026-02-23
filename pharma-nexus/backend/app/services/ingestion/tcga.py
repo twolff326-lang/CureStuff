@@ -233,6 +233,15 @@ class TCGAConnector(BaseConnector):
             )
             return 0
 
+        # Check for GDC-level error messages in the response
+        if "message" in data and "data" not in data:
+            self.record_error(
+                f"gdc_api_error_{project_id}",
+                RuntimeError(f"GDC API error: {data.get('message', 'unknown')}"),
+                record_id=project_id,
+            )
+            return 0
+
         hits = data.get("data", {}).get("hits", [])
         if not hits:
             return 0

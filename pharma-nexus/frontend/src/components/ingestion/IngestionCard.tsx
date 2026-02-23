@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
+interface IngestionError {
+  context: string;
+  error: string;
+  type: string;
+  record_id: string;
+  timestamp: string;
+}
+
 export interface SourceStatus {
   id: number;
   source: string;
@@ -9,7 +17,7 @@ export interface SourceStatus {
   status: string; // "running" | "completed" | "failed"
   records_processed: number;
   total_expected: number | null;
-  errors: unknown[] | null;
+  errors: IngestionError[] | null;
   started_at: string | null;
   completed_at: string | null;
 }
@@ -52,6 +60,8 @@ export default function IngestionCard({
   const isCompleted = status?.status === "completed";
   const isFailed = status?.status === "failed";
   const hasStatus = status !== null;
+
+  const [errorsExpanded, setErrorsExpanded] = useState(false);
 
   // Animate the displayed record count toward the real value
   const [displayCount, setDisplayCount] = useState(0);
@@ -210,11 +220,31 @@ export default function IngestionCard({
               </div>
             )}
 
-            {/* Error count */}
+            {/* Error count — clickable to expand details */}
             {errorCount > 0 && (
-              <p className="text-xs text-red-500">
-                {errorCount} error{errorCount !== 1 ? "s" : ""}
-              </p>
+              <button
+                type="button"
+                onClick={() => setErrorsExpanded((v) => !v)}
+                className="flex w-full items-center gap-1.5 text-left text-xs text-red-600 hover:text-red-800 transition-colors"
+              >
+                <svg
+                  className={`h-3 w-3 shrink-0 transition-transform duration-200 ${errorsExpanded ? "rotate-90" : ""}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="font-medium">
+                  {errorCount} error{errorCount !== 1 ? "s" : ""}
+                </span>
+                <span className="text-red-400">
+                  {errorsExpanded ? "hide" : "show details"}
+                </span>
+              </button>
+            )}
+
+            {/* Expanded error details panel */}
+            {errorsExpanded && errorCount > 0 && (
+              <ErrorDetailsPanel errors={(status?.errors ?? []) as IngestionError[]} />
             )}
           </div>
         )}
@@ -251,6 +281,78 @@ export default function IngestionCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ErrorDetailsPanel({ errors }: { errors: IngestionError[] }) {
+  // Group errors by context for a compact summary
+  const grouped = new Map<string, { count: number; type: string; sample: string; record_ids: string[] }>();
+  for (const err of errors) {
+    const key = err.context || "unknown";
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count++;
+      if (existing.record_ids.length < 3) {
+        existing.record_ids.push(err.record_id);
+      }
+    } else {
+      grouped.set(key, {
+        count: 1,
+        type: err.type || "Error",
+        sample: err.error || "No message",
+        record_ids: err.record_id ? [err.record_id] : [],
+      });
+    }
+  }
+
+  const MAX_DETAIL_ROWS = 50;
+  const showRaw = errors.length <= MAX_DETAIL_ROWS;
+
+  return (
+    <div className="mt-2 max-h-64 overflow-y-auto rounded-md border border-red-200 bg-red-50/70 p-3">
+      {/* Summary by context */}
+      <div className="space-y-2">
+        {Array.from(grouped.entries()).map(([ctx, info]) => (
+          <div key={ctx} className="rounded border border-red-100 bg-white/80 px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-red-800">{ctx}</span>
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-red-700">
+                {info.count}x
+              </span>
+            </div>
+            <p className="mt-0.5 text-[11px] font-mono text-red-700">
+              {info.type}: {info.sample.length > 200 ? info.sample.slice(0, 200) + "..." : info.sample}
+            </p>
+            {info.record_ids.length > 0 && (
+              <p className="mt-0.5 text-[10px] text-red-500">
+                records: {info.record_ids.join(", ")}
+                {info.count > info.record_ids.length ? ` (+${info.count - info.record_ids.length} more)` : ""}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Individual error rows for smaller error sets */}
+      {showRaw && errors.length > 1 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-[10px] font-medium text-red-500 hover:text-red-700">
+            Show all {errors.length} individual errors
+          </summary>
+          <div className="mt-1 space-y-1">
+            {errors.map((err, i) => (
+              <div key={i} className="rounded border border-red-100 bg-white/60 px-2 py-1 text-[10px]">
+                <span className="font-semibold text-red-800">[{err.context}]</span>{" "}
+                <span className="font-mono text-red-700">{err.type}: {err.error}</span>
+                {err.record_id && (
+                  <span className="ml-1 text-red-400">({err.record_id})</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
