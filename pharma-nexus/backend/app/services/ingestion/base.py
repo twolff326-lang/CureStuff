@@ -365,10 +365,11 @@ class BaseConnector(ABC):
     async def run(self, task_type: str = "full_ingestion") -> dict[str, Any]:
         """Execute the full ingestion pipeline.
 
-        1. Create ingestion log entry
-        2. Fetch data from source
-        3. Transform and batch-upsert records
-        4. Finalize log with status and error summary
+        1. Check for already-running task (skip if duplicate)
+        2. Create ingestion log entry
+        3. Fetch data from source
+        4. Transform and batch-upsert records
+        5. Finalize log with status and error summary
 
         Returns:
             Summary dict with records_processed, errors count, status.
@@ -380,6 +381,30 @@ class BaseConnector(ABC):
             session = self._external_session
 
         try:
+            # Guard: skip if this source already has a "running" log entry.
+            # This prevents stale Celery retries (from Redis persistence
+            # across container restarts) from spawning duplicate runs.
+            existing = await session.execute(
+                select(IngestionLog.id)
+                .where(
+                    IngestionLog.source == self.get_source_name(),
+                    IngestionLog.status == "running",
+                )
+                .limit(1)
+            )
+            if existing.scalar_one_or_none() is not None:
+                logger.info(
+                    "Skipping %s — already has a running ingestion task",
+                    self.get_source_name(),
+                )
+                return {
+                    "source": self.get_source_name(),
+                    "status": "skipped_already_running",
+                    "records_processed": 0,
+                    "errors_count": 0,
+                    "errors": [],
+                    "log_id": None,
+                }
 
             self._log_id = await self._create_log(session, task_type)
             await session.commit()

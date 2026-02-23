@@ -50,17 +50,37 @@ class IngestionRequest(BaseModel):
 
 
 @router.post("/start")
-async def start_ingestion(request: IngestionRequest):
+async def start_ingestion(
+    request: IngestionRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """Kick off a data ingestion Celery task.
 
     Body: {"source": "drugbank"|"pubchem"|"chembl"|"all_drugs", "xml_path": "..."}
     Returns: {"task_id": "...", "status": "queued"}
+
+    If the source already has a running task, returns 409 instead of
+    spawning a duplicate.
     """
     source = request.source.lower()
     if source not in VALID_SOURCES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid source '{source}'. Must be one of: {', '.join(sorted(VALID_SOURCES))}",
+        )
+
+    # Guard: reject if this source already has a task in "running" state.
+    # This prevents stale Celery retries (surviving Redis restarts) from
+    # piling up duplicate runs.
+    running_check = await db.execute(
+        select(IngestionLog.id)
+        .where(IngestionLog.source == source, IngestionLog.status == "running")
+        .limit(1)
+    )
+    if running_check.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Source '{source}' already has a running task.",
         )
 
     task_map = {
