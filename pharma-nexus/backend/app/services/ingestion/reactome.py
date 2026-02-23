@@ -40,7 +40,7 @@ class ReactomeConnector(BaseConnector):
             http_client=http_client,
             rate_limit=3.0,
             batch_size=500,
-            timeout=60.0,
+            timeout=120.0,  # containedEvents can return large responses
             **kwargs,
         )
         self._headers = {"Accept": "application/json"}
@@ -201,13 +201,13 @@ class ReactomeConnector(BaseConnector):
         parent_db_id: int | None,
         depth: int = 0,
     ) -> int:
-        """Recursively process a pathway and its children.
+        """Process a pathway and its children.
 
-        Max depth of 4 to avoid excessive API calls.
+        For top-level pathways (depth=0), fetches containedEvents once
+        and processes the flat list — the API returns the full subtree,
+        so recursive per-child calls are unnecessary and cause an
+        exponential explosion of API requests.
         """
-        if depth > 4:
-            return 0
-
         stId = pathway.get("stId", "")
         display_name = pathway.get("displayName", "")
 
@@ -219,13 +219,12 @@ class ReactomeConnector(BaseConnector):
         if depth == 0:
             category = display_name
         elif parent_db_id:
-            # Inherit category from parent (top-level)
             result = await session.execute(
                 select(Pathway.category).where(Pathway.id == parent_db_id)
             )
             category = result.scalar_one_or_none() or ""
 
-        # Upsert pathway record
+        # Upsert root pathway record
         pathway_record = {
             "source": "reactome",
             "external_id": stId,
@@ -246,7 +245,6 @@ class ReactomeConnector(BaseConnector):
         )
         await session.flush()
 
-        # Get the DB ID
         result = await session.execute(
             select(Pathway.id).where(
                 Pathway.source == "reactome",
@@ -260,7 +258,11 @@ class ReactomeConnector(BaseConnector):
         self._pathway_db_ids[stId] = db_id
         processed = 1
 
-        # Fetch children (contained events)
+        # Only fetch children for top-level pathways — the
+        # containedEvents endpoint already returns the full subtree.
+        if depth > 0:
+            return processed
+
         try:
             resp = await self.http_get(
                 client,
@@ -269,25 +271,52 @@ class ReactomeConnector(BaseConnector):
             )
             children = resp.json()
 
-            # Filter to only Pathway type (skip Reactions at deeper levels)
+            # Filter to Pathway type only (skip Reactions)
             child_pathways = [
                 c for c in children
                 if c.get("schemaClass") == "Pathway"
                 or c.get("className") == "Pathway"
             ]
 
+            # Batch upsert all child pathways at once instead of
+            # recursively fetching containedEvents for each.
+            child_records = []
             for child in child_pathways:
-                try:
-                    count = await self._process_pathway_tree(
-                        client, session, child, parent_db_id=db_id, depth=depth + 1
+                child_stId = child.get("stId", "")
+                if not child_stId or child_stId in self._pathway_db_ids:
+                    continue
+                child_records.append({
+                    "source": "reactome",
+                    "external_id": child_stId,
+                    "name": child.get("displayName", ""),
+                    "description": "",
+                    "category": category,
+                    "genes": [],
+                    "parent_pathway_id": db_id,
+                })
+
+            if child_records:
+                await self.batch_upsert_composite(
+                    session,
+                    Pathway,
+                    child_records,
+                    conflict_columns=["source", "external_id"],
+                    update_columns=["name", "category", "parent_pathway_id"],
+                )
+                await session.flush()
+
+                # Cache the new DB IDs
+                ext_ids = [r["external_id"] for r in child_records]
+                id_result = await session.execute(
+                    select(Pathway.external_id, Pathway.id).where(
+                        Pathway.source == "reactome",
+                        Pathway.external_id.in_(ext_ids),
                     )
-                    processed += count
-                except Exception as exc:
-                    self.record_error(
-                        f"child_{child.get('stId', '')}",
-                        exc,
-                        record_id=child.get("stId", ""),
-                    )
+                )
+                for ext_id, pid in id_result.all():
+                    self._pathway_db_ids[ext_id] = pid
+
+                processed += len(child_records)
 
         except Exception as exc:
             self.record_error(f"children_{stId}", exc, record_id=stId)
