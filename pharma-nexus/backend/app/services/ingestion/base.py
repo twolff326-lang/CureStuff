@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -381,25 +381,36 @@ class BaseConnector(ABC):
             session = self._external_session
 
         try:
-            # Guard: skip if this source already has a "running" log entry.
-            # This prevents stale Celery retries (from Redis persistence
-            # across container restarts) from spawning duplicate runs.
+            # Guard: skip if this source is already running OR completed
+            # very recently.  Stale Celery retries (persisted in Redis
+            # across container restarts) arrive minutes after the fresh
+            # run has already finished.  The 10-minute window covers the
+            # worst-case retry countdown (4 min) with generous margin.
+            from sqlalchemy import or_, and_
+
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
             existing = await session.execute(
                 select(IngestionLog.id)
                 .where(
                     IngestionLog.source == self.get_source_name(),
-                    IngestionLog.status == "running",
+                    or_(
+                        IngestionLog.status == "running",
+                        and_(
+                            IngestionLog.status == "completed",
+                            IngestionLog.completed_at >= cutoff,
+                        ),
+                    ),
                 )
                 .limit(1)
             )
             if existing.scalar_one_or_none() is not None:
                 logger.info(
-                    "Skipping %s — already has a running ingestion task",
+                    "Skipping %s — already running or recently completed",
                     self.get_source_name(),
                 )
                 return {
                     "source": self.get_source_name(),
-                    "status": "skipped_already_running",
+                    "status": "skipped_duplicate",
                     "records_processed": 0,
                     "errors_count": 0,
                     "errors": [],
