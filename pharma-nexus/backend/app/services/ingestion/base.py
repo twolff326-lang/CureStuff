@@ -436,6 +436,11 @@ class BaseConnector(ABC):
 
             except Exception as exc:
                 self.record_error("fetch_data", exc)
+                # The failed operation may have left the transaction in an
+                # aborted state (e.g. CardinalityViolationError).  We must
+                # rollback before issuing any new SQL, otherwise the UPDATE
+                # below will fail with InFailedSqlTransactionError.
+                await session.rollback()
                 await self._update_log(
                     session, self._log_id, "failed",
                     self._records_processed, self._errors,
