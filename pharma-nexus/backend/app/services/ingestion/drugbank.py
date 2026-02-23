@@ -456,6 +456,15 @@ class DrugBankConnector(BaseConnector):
                     self._records_processed = len(drug_records)
                     await self._flush_progress(session)
 
+            # Deduplicate by drugbank_id — PubChem can return the same
+            # CID for different drug name synonyms (e.g. "Rapamycin" and
+            # "Sirolimus"), which causes a CardinalityViolationError in
+            # the ON CONFLICT DO UPDATE statement.
+            seen: dict[str, dict[str, Any]] = {}
+            for rec in drug_records:
+                seen[rec["drugbank_id"]] = rec  # last-wins dedup
+            drug_records = list(seen.values())
+
             # Batch upsert all
             if drug_records:
                 await self.batch_upsert(
