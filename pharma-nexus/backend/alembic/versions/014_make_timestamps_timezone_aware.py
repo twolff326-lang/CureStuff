@@ -29,10 +29,13 @@ _UPGRADE_COLUMNS = [
     ("pipeline_runs", "completed_at"),
     ("ingestion_logs", "started_at"),
     ("ingestion_logs", "completed_at"),
-    ("ingestion_logs", "data_downloaded_at"),
     ("gnn_training_runs", "created_at"),
     ("gnn_training_runs", "completed_at"),
 ]
+
+# Note: ingestion_logs.data_downloaded_at is not included here because
+# no prior migration creates that column.  The model already defines it
+# as DateTime(timezone=True), so it will be created correctly when added.
 
 
 def upgrade() -> None:
