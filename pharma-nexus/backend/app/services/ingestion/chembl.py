@@ -74,7 +74,7 @@ class ChEMBLConnector(BaseConnector):
 
             # Phase 2: Fetch binding affinities for drugs in our database
             affinity_count = await self._fetch_binding_affinities(
-                session, client
+                session, client, phase1_count=mech_count,
             )
             total += affinity_count
 
@@ -190,6 +190,10 @@ class ChEMBLConnector(BaseConnector):
                         record_id=mech.get("molecule_chembl_id", "unknown"),
                     )
 
+            # Flush progress after each page so the UI updates
+            self._records_processed = total_fetched
+            await self._flush_progress(session)
+
             # Batch commit
             if len(drug_target_records) >= self._batch_size:
                 await self.batch_upsert_composite(
@@ -224,7 +228,8 @@ class ChEMBLConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     async def _fetch_binding_affinities(
-        self, session: AsyncSession, client: httpx.AsyncClient
+        self, session: AsyncSession, client: httpx.AsyncClient,
+        phase1_count: int = 0,
     ) -> int:
         """Fetch quantitative binding affinities for drugs in our database."""
         # Get all drugs that have ChEMBL cross-references
@@ -239,19 +244,22 @@ class ChEMBLConnector(BaseConnector):
             logger.info("No drugs to fetch affinities for")
             return 0
 
-        # Update total_expected: current progress + number of drugs to enrich
+        # Update total_expected: phase1 count + number of drugs to enrich
         await self.set_total_expected(
-            session, self._records_processed + len(drugs),
+            session, phase1_count + len(drugs),
         )
 
         total_activities = 0
 
-        for drug_id, drugbank_id, drug_name in drugs:
+        for idx, (drug_id, drugbank_id, drug_name) in enumerate(drugs, 1):
             # Find ChEMBL molecule ID for this drug
             chembl_id = await self._find_chembl_id_for_drug(
                 client, drugbank_id, drug_name
             )
             if not chembl_id:
+                self._records_processed = phase1_count + idx
+                if idx % 10 == 0:
+                    await self._flush_progress(session)
                 continue
 
             try:
@@ -263,6 +271,15 @@ class ChEMBLConnector(BaseConnector):
                 self.record_error(
                     "fetch_affinities", exc, record_id=drugbank_id
                 )
+
+            # Flush progress every 10 drugs so the UI updates
+            self._records_processed = phase1_count + idx
+            if idx % 10 == 0:
+                await self._flush_progress(session)
+
+        # Final flush for Phase 2
+        self._records_processed = phase1_count + len(drugs)
+        await self._flush_progress(session)
 
         logger.info(
             "Fetched %d binding affinity records from ChEMBL",
