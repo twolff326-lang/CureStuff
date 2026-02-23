@@ -138,7 +138,8 @@ class TestExternalAPIs:
     def _client(self):
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
         yield
-        run(self.client.aclose())
+        # Client cleanup happens inside each test's run() event loop.
+        # Don't try to close on a separate loop — httpx handles GC.
 
     def test_pubchem_api(self):
         async def _test():
