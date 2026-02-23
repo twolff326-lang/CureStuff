@@ -111,7 +111,7 @@ class TestDatabaseConnectivity:
                 )
         run(_test())
 
-    def test_alembic_version_is_015(self):
+    def test_alembic_version_is_016(self):
         """Verify all migrations have been applied."""
         async def _test():
             from sqlalchemy import text
@@ -120,8 +120,8 @@ class TestDatabaseConnectivity:
                     text("SELECT version_num FROM alembic_version")
                 )
                 version = result.scalar()
-                assert version == "015", (
-                    f"Alembic version is {version!r}, expected '015'. "
+                assert version == "016", (
+                    f"Alembic version is {version!r}, expected '016'. "
                     f"Run: alembic upgrade head"
                 )
         run(_test())
