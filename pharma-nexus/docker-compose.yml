@@ -50,8 +50,8 @@ services:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"${NEO4J_PASSWORD:-change_me_in_production}\" 'RETURN 1' || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 5
-      start_period: 40s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
     networks:
       - pharma-net
