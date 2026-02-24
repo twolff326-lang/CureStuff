@@ -47,11 +47,11 @@ services:
       - neo4j_data:/data
       - ./neo4j/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"${NEO4J_PASSWORD:-change_me_in_production}\" 'RETURN 1' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 40s
     restart: unless-stopped
     networks:
       - pharma-net
