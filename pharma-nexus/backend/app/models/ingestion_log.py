@@ -53,6 +53,10 @@ class IngestionLog(Base):
         Float, nullable=True,
         comment="Wall-clock ingestion duration in seconds",
     )
+    checkpoint = Column(
+        JSONB, nullable=True,
+        comment="Resume checkpoint for long-running connectors (phase, offset, etc.)",
+    )
 
     __table_args__ = (
         Index("ix_ingestion_logs_errors", "errors", postgresql_using="gin"),
