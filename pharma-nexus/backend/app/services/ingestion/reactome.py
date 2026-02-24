@@ -271,11 +271,14 @@ class ReactomeConnector(BaseConnector):
             )
             children = resp.json()
 
-            # Filter to Pathway type only (skip Reactions)
+            # Filter to Pathway type only (skip Reactions).
+            # The API may return a mix of full objects (dicts) and
+            # bare integer dbIds — skip non-dict entries.
             child_pathways = [
                 c for c in children
-                if c.get("schemaClass") == "Pathway"
-                or c.get("className") == "Pathway"
+                if isinstance(c, dict)
+                and (c.get("schemaClass") == "Pathway"
+                     or c.get("className") == "Pathway")
             ]
 
             # Batch upsert all child pathways at once instead of
