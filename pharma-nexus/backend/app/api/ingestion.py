@@ -355,6 +355,140 @@ async def get_live_status(
     return {"sources": sources}
 
 
+@router.get("/diagnostic-report/{source}")
+async def get_diagnostic_report(
+    source: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a full diagnostic report for a source's most recent run.
+
+    Returns a structured report with:
+    - Run metadata (status, timing, record counts)
+    - Errors grouped by category with full tracebacks
+    - Suggested fixes per error category
+    - A pre-formatted plain-text report suitable for pasting into
+      Claude Code or an issue tracker
+    """
+    # Find latest log for this source
+    result = await db.execute(
+        select(IngestionLog)
+        .where(IngestionLog.source == source)
+        .order_by(IngestionLog.id.desc())
+        .limit(1)
+    )
+    log = result.scalar_one_or_none()
+    if log is None:
+        raise HTTPException(status_code=404, detail=f"No ingestion log found for source '{source}'")
+
+    errors = log.errors or []
+
+    # Group errors by category
+    by_category: dict[str, list] = {}
+    for err in errors:
+        cat = err.get("category", "unknown")
+        by_category.setdefault(cat, []).append(err)
+
+    # Group by context
+    by_context: dict[str, list] = {}
+    for err in errors:
+        ctx = err.get("context", "unknown")
+        by_context.setdefault(ctx, []).append(err)
+
+    # Build the copy-paste plain-text report
+    duration = ""
+    if log.started_at and log.completed_at:
+        secs = (log.completed_at - log.started_at).total_seconds()
+        mins = int(secs // 60)
+        rem = int(secs % 60)
+        duration = f"{mins}m {rem}s" if mins else f"{rem}s"
+    elif log.started_at:
+        from datetime import timezone as tz
+        secs = (datetime.now(tz.utc) - log.started_at).total_seconds()
+        mins = int(secs // 60)
+        rem = int(secs % 60)
+        duration = f"{mins}m {rem}s (still running)" if mins else f"{rem}s (still running)"
+
+    lines = [
+        f"## Ingestion Diagnostic Report: {source}",
+        f"",
+        f"Status: {log.status}",
+        f"Records: {log.records_processed}" + (f" / {log.total_expected}" if log.total_expected else ""),
+        f"Duration: {duration}",
+        f"Started: {log.started_at.isoformat() if log.started_at else 'N/A'}",
+        f"Completed: {log.completed_at.isoformat() if log.completed_at else 'N/A'}",
+        f"Total errors: {len(errors)}",
+        f"",
+    ]
+
+    if errors:
+        lines.append("### Error Summary by Category")
+        lines.append("")
+        for cat, cat_errors in sorted(by_category.items()):
+            lines.append(f"**{cat}** ({len(cat_errors)}x)")
+            # Show the suggested fix from the first error in this category
+            fix = cat_errors[0].get("suggested_fix", "")
+            if fix:
+                lines.append(f"  Suggested fix: {fix}")
+            lines.append("")
+
+        lines.append("### Error Details")
+        lines.append("")
+        for i, err in enumerate(errors[:100], 1):  # Cap at 100 for the report
+            lines.append(f"#### Error {i}: [{err.get('category', '?')}] {err.get('context', '?')}")
+            lines.append(f"```")
+            lines.append(f"Type: {err.get('type', '?')}")
+            lines.append(f"Message: {err.get('error', '?')}")
+            if err.get("record_id"):
+                lines.append(f"Record ID: {err['record_id']}")
+            http_info = err.get("http", {})
+            if http_info:
+                lines.append(f"URL: {http_info.get('url', '?')}")
+                lines.append(f"HTTP Status: {http_info.get('status_code', '?')}")
+                resp_body = http_info.get("response_body", "")
+                if resp_body:
+                    lines.append(f"Response: {resp_body[:500]}")
+            tb = err.get("traceback", "")
+            if tb:
+                lines.append(f"")
+                lines.append(f"Traceback:")
+                lines.append(tb.rstrip())
+            lines.append(f"```")
+            lines.append("")
+
+    plain_text_report = "\n".join(lines)
+
+    return {
+        "source": source,
+        "log_id": log.id,
+        "status": log.status,
+        "records_processed": log.records_processed,
+        "total_expected": log.total_expected,
+        "started_at": log.started_at.isoformat() if log.started_at else None,
+        "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+        "duration": duration,
+        "total_errors": len(errors),
+        "errors_by_category": {
+            cat: {
+                "count": len(errs),
+                "suggested_fix": errs[0].get("suggested_fix", "") if errs else "",
+                "sample_error": errs[0].get("error", "") if errs else "",
+                "sample_type": errs[0].get("type", "") if errs else "",
+            }
+            for cat, errs in by_category.items()
+        },
+        "errors_by_context": {
+            ctx: {
+                "count": len(errs),
+                "category": errs[0].get("category", "unknown"),
+                "sample_error": errs[0].get("error", "") if errs else "",
+            }
+            for ctx, errs in by_context.items()
+        },
+        "errors": errors[:200],  # Full detail, capped at 200
+        "plain_text_report": plain_text_report,
+    }
+
+
 @router.get("/logs")
 async def get_ingestion_logs(
     source: str | None = Query(None, description="Filter by source name"),
