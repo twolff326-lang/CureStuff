@@ -83,6 +83,11 @@ class ChEMBLConnector(BaseConnector):
                 skip_phase1 = True
                 phase1_saved_count = cp.get("phase1_count", 0)
                 resume_drug_idx = cp.get("phase2_drug_idx", 0)
+                self._log_event(
+                    "checkpoint_resume",
+                    f"skip Phase 1 (count={phase1_saved_count}), "
+                    f"Phase 2 from drug idx {resume_drug_idx}",
+                )
                 logger.info(
                     "Resuming ChEMBL from checkpoint: skip Phase 1 "
                     "(count=%d), Phase 2 from drug idx %d",
@@ -94,10 +99,23 @@ class ChEMBLConnector(BaseConnector):
                 mech_count = phase1_saved_count
                 self._records_processed = mech_count
                 await self._flush_progress(session)
+                self.record_warning(
+                    "phase1_skipped",
+                    f"Phase 1 skipped via checkpoint (previous count={phase1_saved_count})",
+                )
             else:
                 # Phase 1: Fetch approved drug mechanisms
+                self.begin_phase(
+                    "Phase 1: Approved mechanisms",
+                    "Fetching approved drug mechanisms from ChEMBL (max_phase=4)",
+                )
                 mech_count = await self._fetch_approved_mechanisms(
                     session, client,
+                )
+                self.end_phase(
+                    records_in=self._report["data_quality"]["total_api_records_received"],
+                    records_out=mech_count,
+                    detail=f"{mech_count} mechanisms processed",
                 )
                 # Save checkpoint: Phase 1 done
                 await self._save_checkpoint(session, {
@@ -110,16 +128,37 @@ class ChEMBLConnector(BaseConnector):
             total += mech_count
 
             # Phase 2: Fetch binding affinities for drugs in our database
+            self.begin_phase(
+                "Phase 2: Binding affinities",
+                f"Fetching IC50/Ki/Kd/EC50 for approved drugs"
+                + (f" (resuming from idx {resume_drug_idx})" if resume_drug_idx else ""),
+            )
             affinity_count = await self._fetch_binding_affinities(
                 session, client,
                 phase1_count=mech_count,
                 resume_drug_idx=resume_drug_idx,
+            )
+            self.end_phase(
+                records_in=self._report["data_quality"]["total_api_records_received"],
+                records_out=affinity_count,
+                detail=f"{affinity_count} activity records stored",
             )
             total += affinity_count
 
         finally:
             if owns_client:
                 await client.aclose()
+            # Report final cache stats
+            self._report["caches"]["target_cache"] = {
+                "size": len(self._target_cache),
+                "resolved": sum(1 for v in self._target_cache.values() if v[0]),
+                "unresolved": sum(1 for v in self._target_cache.values() if not v[0]),
+            }
+            self._report["caches"]["molecule_drugbank_map"] = {
+                "size": len(self._molecule_drugbank_map),
+                "matched": sum(1 for v in self._molecule_drugbank_map.values() if v),
+                "unmatched": sum(1 for v in self._molecule_drugbank_map.values() if not v),
+            }
 
         self._records_processed = total
         return []
@@ -139,6 +178,11 @@ class ChEMBLConnector(BaseConnector):
         offset = 0
         total_fetched = 0
         drug_target_records: list[dict[str, Any]] = []
+        pages_fetched = 0
+        skipped_no_ids = 0
+        skipped_no_uniprot = 0
+        skipped_no_drugbank = 0
+        skipped_no_drug = 0
 
         while True:
             url = f"{CHEMBL_BASE}/mechanism.json"
@@ -160,8 +204,14 @@ class ChEMBLConnector(BaseConnector):
 
             mechanisms = data.get("mechanisms", [])
             if not mechanisms:
+                self._log_event(
+                    "phase1_empty_page",
+                    f"offset={offset}: empty mechanisms list, stopping pagination",
+                )
                 break
 
+            pages_fetched += 1
+            self.report_api_records(len(mechanisms))
             page_meta = data.get("page_meta", {})
 
             # Set total_expected from first page metadata
@@ -169,8 +219,16 @@ class ChEMBLConnector(BaseConnector):
                 api_total = page_meta.get("total_count")
                 if api_total:
                     await self.set_total_expected(session, api_total)
+                    self._log_event(
+                        "phase1_total_discovered",
+                        f"ChEMBL reports {api_total} total mechanisms",
+                    )
 
             for mech in mechanisms:
+                if not isinstance(mech, dict):
+                    self.record_skip("non_dict")
+                    continue
+
                 try:
                     molecule_chembl_id = mech.get("molecule_chembl_id")
                     target_chembl_id = mech.get("target_chembl_id")
@@ -178,6 +236,8 @@ class ChEMBLConnector(BaseConnector):
                     mechanism_of_action = mech.get("mechanism_of_action")
 
                     if not molecule_chembl_id or not target_chembl_id:
+                        skipped_no_ids += 1
+                        self.record_skip("missing_field")
                         continue
 
                     # Resolve target to UniProt ID
@@ -185,6 +245,8 @@ class ChEMBLConnector(BaseConnector):
                         client, target_chembl_id
                     )
                     if not uniprot_id:
+                        skipped_no_uniprot += 1
+                        self.record_skip("filtered")
                         continue
 
                     # Resolve molecule to DrugBank ID
@@ -220,6 +282,10 @@ class ChEMBLConnector(BaseConnector):
                                     }
                                 ],
                             })
+                        else:
+                            skipped_no_drug += 1
+                    else:
+                        skipped_no_drugbank += 1
 
                     total_fetched += 1
 
@@ -239,6 +305,11 @@ class ChEMBLConnector(BaseConnector):
             # Flush at end of page as well
             self._records_processed = total_fetched
             await self._flush_progress(session)
+            self._log_event(
+                "phase1_page_done",
+                f"page={pages_fetched} offset={offset} "
+                f"fetched={total_fetched} drug_target_records={len(drug_target_records)}",
+            )
 
             # Batch commit
             if len(drug_target_records) >= self._batch_size:
@@ -255,6 +326,10 @@ class ChEMBLConnector(BaseConnector):
             total_count = page_meta.get("total_count") or 10_000_000
             max_pages = 100
             if offset >= total_count or offset >= max_pages * PAGE_SIZE:
+                self._log_event(
+                    "phase1_pagination_end",
+                    f"offset={offset} >= total_count={total_count} or max_pages={max_pages}",
+                )
                 break
 
         # Final batch
@@ -265,6 +340,14 @@ class ChEMBLConnector(BaseConnector):
                 update_columns=["action_type", "known_action", "source", "references"],
             )
             await session.commit()
+
+        # Report Phase 1 skip breakdown
+        if skipped_no_ids or skipped_no_uniprot or skipped_no_drugbank or skipped_no_drug:
+            self.record_warning(
+                "phase1_skip_summary",
+                f"Skipped: no_ids={skipped_no_ids} no_uniprot={skipped_no_uniprot} "
+                f"no_drugbank={skipped_no_drugbank} no_drug_in_db={skipped_no_drug}",
+            )
 
         logger.info("Fetched %d mechanisms from ChEMBL", total_fetched)
         return total_fetched
@@ -294,8 +377,14 @@ class ChEMBLConnector(BaseConnector):
         drugs = result.all()
 
         if not drugs:
+            self.record_warning("phase2_no_drugs", "No approved drugs found in DB to fetch affinities for")
             logger.info("No drugs to fetch affinities for")
             return 0
+
+        self._log_event(
+            "phase2_drug_list",
+            f"{len(drugs)} approved drugs found, resume_idx={resume_drug_idx}",
+        )
 
         # Update total_expected: phase1 count + number of drugs to enrich
         await self.set_total_expected(
@@ -312,6 +401,9 @@ class ChEMBLConnector(BaseConnector):
             await self._flush_progress(session)
 
         total_activities = 0
+        drugs_with_chembl_id = 0
+        drugs_without_chembl_id = 0
+        drugs_with_activities = 0
 
         for idx, (drug_id, drugbank_id, drug_name) in enumerate(drugs, 1):
             # Skip drugs already processed in a previous run
@@ -323,16 +415,21 @@ class ChEMBLConnector(BaseConnector):
                 client, drugbank_id, drug_name
             )
             if not chembl_id:
+                drugs_without_chembl_id += 1
                 self._records_processed = phase1_count + idx
                 if idx % 10 == 0:
                     await self._flush_progress(session)
                 continue
+
+            drugs_with_chembl_id += 1
 
             try:
                 activities = await self._fetch_activities_for_molecule(
                     session, client, chembl_id, drug_id
                 )
                 total_activities += activities
+                if activities > 0:
+                    drugs_with_activities += 1
             except Exception as exc:
                 self.record_error(
                     "fetch_affinities", exc, record_id=drugbank_id
@@ -349,10 +446,27 @@ class ChEMBLConnector(BaseConnector):
                     "phase1_count": phase1_count,
                     "phase2_drug_idx": idx,
                 })
+                self._log_event(
+                    "phase2_progress",
+                    f"drug {idx}/{len(drugs)}: "
+                    f"with_chembl={drugs_with_chembl_id} "
+                    f"without_chembl={drugs_without_chembl_id} "
+                    f"activities={total_activities}",
+                )
 
         # Final flush for Phase 2
         self._records_processed = phase1_count + len(drugs)
         await self._flush_progress(session)
+
+        # Report Phase 2 summary
+        self.record_warning(
+            "phase2_drug_resolution_summary",
+            f"Total drugs: {len(drugs)}, "
+            f"resolved to ChEMBL ID: {drugs_with_chembl_id}, "
+            f"no ChEMBL ID: {drugs_without_chembl_id}, "
+            f"had activities: {drugs_with_activities}, "
+            f"total activity records: {total_activities}",
+        )
 
         logger.info(
             "Fetched %d binding affinity records from ChEMBL",
@@ -372,6 +486,7 @@ class ChEMBLConnector(BaseConnector):
         total = 0
         bioassay_records: list[dict[str, Any]] = []
         affinity_updates: list[tuple[int, int, float]] = []
+        pages_for_molecule = 0
 
         while True:
             url = f"{CHEMBL_BASE}/activity.json"
@@ -400,9 +515,15 @@ class ChEMBLConnector(BaseConnector):
             if not activities:
                 break
 
+            pages_for_molecule += 1
+            self.report_api_records(len(activities))
             page_meta = data.get("page_meta", {})
 
             for act in activities:
+                if not isinstance(act, dict):
+                    self.record_skip("non_dict")
+                    continue
+
                 try:
                     target_chembl_id = act.get("target_chembl_id")
                     standard_type = act.get("standard_type")
@@ -410,11 +531,13 @@ class ChEMBLConnector(BaseConnector):
                     standard_units = act.get("standard_units")
 
                     if not target_chembl_id or standard_value is None:
+                        self.record_skip("missing_field")
                         continue
 
                     try:
                         value_nm = float(standard_value)
                     except (ValueError, TypeError):
+                        self.record_skip("filtered")
                         continue
 
                     # Resolve target
@@ -422,6 +545,7 @@ class ChEMBLConnector(BaseConnector):
                         client, target_chembl_id
                     )
                     if not uniprot_id:
+                        self.record_skip("filtered")
                         continue
 
                     target_id = await self.get_or_create_target(
@@ -520,6 +644,11 @@ class ChEMBLConnector(BaseConnector):
             else:
                 skipped += 1
         if skipped > 0:
+            self.record_warning(
+                "affinity_update_skipped",
+                f"{skipped} affinity updates skipped (no matching drug-target row), "
+                f"{updated} updated successfully",
+            )
             logger.warning(
                 "Binding affinity update: %d updated, %d skipped (no matching drug-target row)",
                 updated, skipped,
@@ -537,7 +666,10 @@ class ChEMBLConnector(BaseConnector):
         Returns ("", "") if resolution fails.
         """
         if target_chembl_id in self._target_cache:
+            self.report_cache_access("target_cache", hit=True)
             return self._target_cache[target_chembl_id]
+
+        self.report_cache_access("target_cache", hit=False)
 
         url = f"{CHEMBL_BASE}/target/{target_chembl_id}.json"
         try:
@@ -553,8 +685,12 @@ class ChEMBLConnector(BaseConnector):
         gene_symbol = ""
 
         for comp in components:
+            if not isinstance(comp, dict):
+                continue
             accessions = comp.get("target_component_xrefs", [])
             for xref in accessions:
+                if not isinstance(xref, dict):
+                    continue
                 if xref.get("xref_src_db") == "UniProt":
                     uniprot_id = xref.get("xref_id", "")
                     break
@@ -562,6 +698,8 @@ class ChEMBLConnector(BaseConnector):
             # Get gene symbol from synonyms or accession
             synonyms = comp.get("target_component_synonyms", [])
             for syn in synonyms:
+                if not isinstance(syn, dict):
+                    continue
                 if syn.get("syn_type") == "GENE_SYMBOL":
                     gene_symbol = syn.get("component_synonym", "")
                     break
@@ -589,7 +727,10 @@ class ChEMBLConnector(BaseConnector):
         the molecule's preferred name against drug names in our database.
         """
         if molecule_chembl_id in self._molecule_drugbank_map:
+            self.report_cache_access("molecule_drugbank_map", hit=True)
             return self._molecule_drugbank_map[molecule_chembl_id] or None
+
+        self.report_cache_access("molecule_drugbank_map", hit=False)
 
         url = f"{CHEMBL_BASE}/molecule/{molecule_chembl_id}.json"
         try:
@@ -602,6 +743,8 @@ class ChEMBLConnector(BaseConnector):
         # Try 1: ChEMBL→DrugBank cross-reference
         cross_refs = data.get("cross_references", [])
         for xref in cross_refs:
+            if not isinstance(xref, dict):
+                continue
             if xref.get("xref_src") == "drugbank":
                 db_id = xref.get("xref_id", "")
                 self._molecule_drugbank_map[molecule_chembl_id] = db_id
@@ -642,9 +785,13 @@ class ChEMBLConnector(BaseConnector):
 
         molecules = data.get("molecules", [])
         for mol in molecules:
+            if not isinstance(mol, dict):
+                continue
             # Check cross-references for matching DrugBank ID
             xrefs = mol.get("cross_references", [])
             for xref in xrefs:
+                if not isinstance(xref, dict):
+                    continue
                 if (
                     xref.get("xref_src") == "drugbank"
                     and xref.get("xref_id") == drugbank_id

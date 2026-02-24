@@ -1,7 +1,9 @@
 """Base ingestion framework for all 13 biomedical data source connectors.
 
 Provides: async HTTP with rate limiting, retry with exponential backoff,
-batch upsert, progress tracking via ingestion_logs, and error aggregation.
+batch upsert, progress tracking via ingestion_logs, error aggregation,
+and comprehensive execution reports (phases, HTTP stats, data quality,
+timeline, warnings).
 """
 
 import asyncio
@@ -11,6 +13,7 @@ import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select, update
@@ -74,6 +77,206 @@ class BaseConnector(ABC):
         self._total_expected: int | None = None
         self._log_id: int | None = None
         self._checkpoint: dict[str, Any] | None = None
+        self._run_start_time: float = 0.0
+
+        # Execution report — populated automatically by base methods and
+        # optionally enriched by subclass calls to begin_phase / end_phase /
+        # record_warning / record_skip.
+        self._report: dict[str, Any] = self._init_report()
+
+    # ------------------------------------------------------------------
+    # Report infrastructure
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _init_report() -> dict[str, Any]:
+        """Create an empty report skeleton."""
+        return {
+            "phases": [],
+            "http": {
+                "total_requests": 0,
+                "successful": 0,
+                "retries": 0,
+                "failures": 0,
+                "by_status_code": {},
+                "by_domain": {},
+                "latency_samples": [],   # raw ms values, capped at 2000
+                "slowest_call": None,    # {url, latency_ms, status_code}
+            },
+            "data_quality": {
+                "total_api_records_received": 0,
+                "skipped_non_dict": 0,
+                "skipped_missing_field": 0,
+                "skipped_filtered": 0,
+                "skipped_duplicate": 0,
+                "records_inserted": 0,
+                "records_upserted": 0,
+            },
+            "db_operations": {
+                "batch_upsert_calls": 0,
+                "batch_insert_calls": 0,
+                "total_rows_written": 0,
+            },
+            "warnings": [],
+            "timeline": [],
+            "guard_decisions": {
+                "stale_logs_expired": 0,
+                "duplicate_check_result": None,
+                "checkpoint_loaded": None,
+            },
+            "caches": {},
+        }
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _elapsed_s(self) -> float:
+        """Seconds since run() started, or 0 if not started yet."""
+        if self._run_start_time:
+            return round(time.monotonic() - self._run_start_time, 2)
+        return 0.0
+
+    def _log_event(self, event: str, detail: str = "") -> None:
+        """Append a timestamped entry to the report timeline."""
+        self._report["timeline"].append({
+            "t": self._now_iso(),
+            "elapsed_s": self._elapsed_s(),
+            "event": event,
+            "detail": detail,
+        })
+
+    def begin_phase(self, name: str, detail: str = "") -> None:
+        """Start tracking a named execution phase (e.g. 'Phase 1: mechanisms').
+
+        Call end_phase() when the phase completes.
+        """
+        self._report["phases"].append({
+            "name": name,
+            "status": "running",
+            "started_at": self._now_iso(),
+            "ended_at": None,
+            "duration_s": None,
+            "records_in": 0,
+            "records_out": 0,
+            "detail": detail,
+            "_mono_start": time.monotonic(),
+        })
+        self._log_event(f"phase_started:{name}", detail)
+
+    def end_phase(
+        self,
+        records_in: int = 0,
+        records_out: int = 0,
+        status: str = "completed",
+        detail: str = "",
+    ) -> None:
+        """Complete the most recent phase with stats."""
+        if not self._report["phases"]:
+            return
+        phase = self._report["phases"][-1]
+        mono_start = phase.pop("_mono_start", time.monotonic())
+        phase["status"] = status
+        phase["ended_at"] = self._now_iso()
+        phase["duration_s"] = round(time.monotonic() - mono_start, 2)
+        phase["records_in"] = records_in
+        phase["records_out"] = records_out
+        if detail:
+            phase["detail"] = detail
+        self._log_event(
+            f"phase_ended:{phase['name']}",
+            f"status={status} in={records_in} out={records_out}"
+            + (f" {detail}" if detail else ""),
+        )
+
+    def record_warning(self, context: str, message: str) -> None:
+        """Record a non-fatal observation that isn't an error.
+
+        Warnings are for things like: empty API pages, unexpected but
+        non-breaking data shapes, slow responses, fallback paths taken.
+        """
+        entry = {
+            "timestamp": self._now_iso(),
+            "elapsed_s": self._elapsed_s(),
+            "context": context,
+            "message": message,
+        }
+        self._report["warnings"].append(entry)
+        logger.warning(
+            "Ingestion warning [%s] %s: %s",
+            self.get_source_name(), context, message,
+        )
+
+    def record_skip(self, reason: str, count: int = 1) -> None:
+        """Increment a skip counter in the data quality section.
+
+        Valid reasons: non_dict, missing_field, filtered, duplicate.
+        """
+        key = f"skipped_{reason}"
+        dq = self._report["data_quality"]
+        if key in dq:
+            dq[key] += count
+        else:
+            dq[key] = count
+
+    def report_api_records(self, count: int) -> None:
+        """Record how many raw records were received from an API page."""
+        self._report["data_quality"]["total_api_records_received"] += count
+
+    def report_cache_access(self, cache_name: str, hit: bool) -> None:
+        """Track cache hit/miss for a named cache."""
+        caches = self._report["caches"]
+        if cache_name not in caches:
+            caches[cache_name] = {"hits": 0, "misses": 0}
+        if hit:
+            caches[cache_name]["hits"] += 1
+        else:
+            caches[cache_name]["misses"] += 1
+
+    def _finalize_report(self) -> dict[str, Any]:
+        """Compute summary stats and return the report dict for persistence.
+
+        Called once at the end of run() before writing to the DB.
+        """
+        report = self._report
+
+        # Compute HTTP latency percentiles
+        samples = report["http"]["latency_samples"]
+        if samples:
+            sorted_samples = sorted(samples)
+            n = len(sorted_samples)
+            report["http"]["latency_p50_ms"] = round(sorted_samples[n // 2], 1)
+            report["http"]["latency_p95_ms"] = round(
+                sorted_samples[min(int(n * 0.95), n - 1)], 1
+            )
+            report["http"]["latency_p99_ms"] = round(
+                sorted_samples[min(int(n * 0.99), n - 1)], 1
+            )
+            report["http"]["latency_max_ms"] = round(sorted_samples[-1], 1)
+            report["http"]["latency_avg_ms"] = round(sum(samples) / n, 1)
+        # Remove raw samples to avoid bloating JSONB (keep at most 200 for spark-line)
+        if len(samples) > 200:
+            step = len(samples) // 200
+            report["http"]["latency_samples"] = samples[::step][:200]
+
+        # Total run duration
+        if self._run_start_time:
+            report["total_duration_s"] = round(
+                time.monotonic() - self._run_start_time, 2
+            )
+
+        # Summary line
+        http = report["http"]
+        dq = report["data_quality"]
+        report["summary"] = (
+            f"{http['total_requests']} HTTP calls "
+            f"({http['retries']} retries, {http['failures']} failures), "
+            f"{dq['total_api_records_received']} API records received, "
+            f"{dq['records_upserted'] + dq['records_inserted']} rows written, "
+            f"{len(report['warnings'])} warnings, "
+            f"{len(self._errors)} errors"
+        )
+
+        return report
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -111,13 +314,29 @@ class BaseConnector(ABC):
         params: dict | None = None,
         headers: dict | None = None,
     ) -> httpx.Response:
-        """HTTP GET with rate limiting and exponential backoff retry."""
+        """HTTP GET with rate limiting and exponential backoff retry.
+
+        Automatically tracks request count, latency, retries, and failures
+        in the execution report.
+        """
+        http_report = self._report["http"]
+        domain = urlparse(url).netloc
+        retries_this_call = 0
         last_exc: Exception | None = None
+        t0 = time.monotonic()
+
         for attempt in range(MAX_RETRIES + 1):
             await self._rate_limiter.acquire()
             try:
                 resp = await client.get(url, params=params, headers=headers)
+                latency_ms = (time.monotonic() - t0) * 1000
+
+                # Track per-status-code counts
+                sc = str(resp.status_code)
+                http_report["by_status_code"][sc] = http_report["by_status_code"].get(sc, 0) + 1
+
                 if resp.status_code in RETRYABLE_STATUS_CODES:
+                    retries_this_call += 1
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                     if resp.status_code == 429:
                         retry_after = resp.headers.get("Retry-After")
@@ -129,10 +348,38 @@ class BaseConnector(ABC):
                     )
                     await asyncio.sleep(delay)
                     continue
+
                 resp.raise_for_status()
+
+                # Success — record metrics
+                http_report["total_requests"] += 1
+                http_report["successful"] += 1
+                http_report["retries"] += retries_this_call
+                if len(http_report["latency_samples"]) < 2000:
+                    http_report["latency_samples"].append(round(latency_ms, 1))
+
+                # Per-domain stats
+                if domain not in http_report["by_domain"]:
+                    http_report["by_domain"][domain] = {
+                        "requests": 0, "total_ms": 0.0,
+                    }
+                http_report["by_domain"][domain]["requests"] += 1
+                http_report["by_domain"][domain]["total_ms"] += latency_ms
+
+                # Slowest call tracker
+                slowest = http_report["slowest_call"]
+                if slowest is None or latency_ms > slowest["latency_ms"]:
+                    http_report["slowest_call"] = {
+                        "url": url[:200],
+                        "latency_ms": round(latency_ms, 1),
+                        "status_code": resp.status_code,
+                    }
+
                 return resp
+
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
                 last_exc = exc
+                retries_this_call += 1
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
                     "Connection error for %s (attempt %d/%d): %s, waiting %.1fs",
@@ -140,8 +387,19 @@ class BaseConnector(ABC):
                 )
                 await asyncio.sleep(delay)
             except httpx.HTTPStatusError:
+                # Non-retryable HTTP error — track and re-raise
+                latency_ms = (time.monotonic() - t0) * 1000
+                http_report["total_requests"] += 1
+                http_report["failures"] += 1
+                http_report["retries"] += retries_this_call
+                if len(http_report["latency_samples"]) < 2000:
+                    http_report["latency_samples"].append(round(latency_ms, 1))
                 raise
 
+        # All retries exhausted
+        http_report["total_requests"] += 1
+        http_report["failures"] += 1
+        http_report["retries"] += retries_this_call
         raise httpx.ConnectError(
             f"Failed after {MAX_RETRIES + 1} attempts: {last_exc}"
         )
@@ -200,6 +458,9 @@ class BaseConnector(ABC):
             await session.flush()
             total += len(batch)
 
+        self._report["db_operations"]["batch_upsert_calls"] += 1
+        self._report["db_operations"]["total_rows_written"] += total
+        self._report["data_quality"]["records_upserted"] += total
         return total
 
     async def batch_upsert_composite(
@@ -240,6 +501,9 @@ class BaseConnector(ABC):
             await session.flush()
             total += len(batch)
 
+        self._report["db_operations"]["batch_upsert_calls"] += 1
+        self._report["db_operations"]["total_rows_written"] += total
+        self._report["data_quality"]["records_upserted"] += total
         return total
 
     async def batch_insert_no_conflict(
@@ -261,6 +525,9 @@ class BaseConnector(ABC):
             await session.flush()
             total += len(batch)
 
+        self._report["db_operations"]["batch_insert_calls"] += 1
+        self._report["db_operations"]["total_rows_written"] += total
+        self._report["data_quality"]["records_inserted"] += total
         return total
 
     # ------------------------------------------------------------------
@@ -336,6 +603,7 @@ class BaseConnector(ABC):
             "category": category,
             "record_id": record_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": self._elapsed_s(),
             "traceback": tb_str,
             "suggested_fix": self._suggest_fix(category, error),
         }
@@ -365,6 +633,10 @@ class BaseConnector(ABC):
                 }
 
         self._errors.append(error_entry)
+        self._log_event(
+            f"error:{category}",
+            f"[{context}] {type(error).__name__}: {str(error)[:200]}",
+        )
         logger.error(
             "Ingestion error [%s] %s (%s): %s",
             self.get_source_name(), context, category, error,
@@ -395,15 +667,24 @@ class BaseConnector(ABC):
         records_processed: int,
         errors: list[dict],
     ) -> None:
+        values: dict[str, Any] = {
+            "status": status,
+            "records_processed": records_processed,
+            "errors": errors,
+            "report": self._finalize_report(),
+        }
+        if status in ("completed", "failed"):
+            now = datetime.now(timezone.utc)
+            values["completed_at"] = now
+            # Also set duration_seconds from monotonic clock for precision
+            if self._run_start_time:
+                values["duration_seconds"] = round(
+                    time.monotonic() - self._run_start_time, 2
+                )
         stmt = (
             update(IngestionLog)
             .where(IngestionLog.id == log_id)
-            .values(
-                status=status,
-                records_processed=records_processed,
-                errors=errors,
-                completed_at=datetime.now(timezone.utc) if status in ("completed", "failed") else None,
-            )
+            .values(**values)
         )
         await session.execute(stmt)
 
@@ -416,6 +697,7 @@ class BaseConnector(ABC):
         during multi-phase ingestion.
         """
         self._total_expected = total
+        self._log_event("total_expected_set", f"total_expected={total}")
         if self._log_id is None:
             return
         try:
@@ -478,6 +760,7 @@ class BaseConnector(ABC):
         """Persist checkpoint data so a retry can resume from this point."""
         if self._log_id is None:
             return
+        self._log_event("checkpoint_saved", str(data))
         try:
             stmt = (
                 update(IngestionLog)
@@ -532,11 +815,14 @@ class BaseConnector(ABC):
         2. Create ingestion log entry
         3. Fetch data from source
         4. Transform and batch-upsert records
-        5. Finalize log with status and error summary
+        5. Finalize log with status, error summary, and execution report
 
         Returns:
             Summary dict with records_processed, errors count, status.
         """
+        self._run_start_time = time.monotonic()
+        self._log_event("run_started", f"source={self.get_source_name()} task_type={task_type}")
+
         owns_session = self._external_session is None
         if owns_session:
             session = async_session_factory()
@@ -574,6 +860,12 @@ class BaseConnector(ABC):
                     len(stale_ids), self.get_source_name(),
                 )
 
+            self._report["guard_decisions"]["stale_logs_expired"] = len(stale_ids)
+            self._log_event(
+                "stale_check",
+                f"expired {len(stale_ids)} stale log(s)" if stale_ids else "no stale logs",
+            )
+
             # Guard: skip if this source is already running OR completed
             # very recently.  Stale Celery retries (persisted in Redis
             # across container restarts) arrive minutes after the fresh
@@ -581,7 +873,7 @@ class BaseConnector(ABC):
             # worst-case retry countdown (4 min) with generous margin.
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
             existing = await session.execute(
-                select(IngestionLog.id)
+                select(IngestionLog.id, IngestionLog.status, IngestionLog.started_at)
                 .where(
                     IngestionLog.source == self.get_source_name(),
                     or_(
@@ -594,7 +886,14 @@ class BaseConnector(ABC):
                 )
                 .limit(1)
             )
-            if existing.scalar_one_or_none() is not None:
+            existing_row = existing.first()
+            if existing_row is not None:
+                reason = (
+                    f"blocked by log id={existing_row[0]} "
+                    f"status={existing_row[1]} started={existing_row[2]}"
+                )
+                self._report["guard_decisions"]["duplicate_check_result"] = reason
+                self._log_event("duplicate_guard_blocked", reason)
                 logger.info(
                     "Skipping %s — already running or recently completed",
                     self.get_source_name(),
@@ -606,14 +905,24 @@ class BaseConnector(ABC):
                     "errors_count": 0,
                     "errors": [],
                     "log_id": None,
+                    "report": self._finalize_report(),
                 }
+
+            self._report["guard_decisions"]["duplicate_check_result"] = "passed"
+            self._log_event("duplicate_guard_passed")
 
             # Load checkpoint from the most recent failed run (if any)
             # so connectors can resume rather than restart from scratch.
             self._checkpoint = await self._load_previous_checkpoint(session)
+            self._report["guard_decisions"]["checkpoint_loaded"] = self._checkpoint
+            self._log_event(
+                "checkpoint_check",
+                f"loaded: {self._checkpoint}" if self._checkpoint else "no checkpoint found",
+            )
 
             self._log_id = await self._create_log(session, task_type)
             await session.commit()
+            self._log_event("log_created", f"ingestion_log.id={self._log_id}")
 
             try:
                 raw_records = await self.fetch_data(session)
@@ -623,6 +932,11 @@ class BaseConnector(ABC):
                 if raw_records:
                     self._records_processed = len(raw_records)
 
+                self._log_event(
+                    "fetch_data_completed",
+                    f"records_processed={self._records_processed}",
+                )
+
                 await self._update_log(
                     session, self._log_id, "completed",
                     self._records_processed, self._errors,
@@ -631,6 +945,10 @@ class BaseConnector(ABC):
 
             except Exception as exc:
                 self.record_error("fetch_data", exc)
+                self._log_event(
+                    "fetch_data_failed",
+                    f"{type(exc).__name__}: {str(exc)[:200]}",
+                )
                 # The failed operation may have left the transaction in an
                 # aborted state (e.g. CardinalityViolationError).  We must
                 # rollback before issuing any new SQL, otherwise the UPDATE
