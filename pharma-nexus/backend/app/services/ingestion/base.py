@@ -7,6 +7,7 @@ batch upsert, progress tracking via ingestion_logs, and error aggregation.
 import asyncio
 import logging
 import time
+import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -265,17 +266,108 @@ class BaseConnector(ABC):
     # Error aggregation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _classify_error(error: Exception) -> str:
+        """Categorize an exception for the frontend error panel."""
+        name = type(error).__name__
+        msg = str(error).lower()
+
+        if isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+            return "timeout"
+        if isinstance(error, (httpx.ConnectError, httpx.RemoteProtocolError)):
+            return "connection"
+        if isinstance(error, httpx.HTTPStatusError):
+            code = error.response.status_code
+            if code == 429:
+                return "rate_limit"
+            if 400 <= code < 500:
+                return "api_client_error"
+            if 500 <= code < 600:
+                return "api_server_error"
+            return "api_error"
+        if "unique" in msg or "duplicate" in msg or "constraint" in msg:
+            return "db_constraint"
+        if "deadlock" in msg or "lock" in msg:
+            return "db_lock"
+        if "connection" in msg and ("refused" in msg or "reset" in msg):
+            return "connection"
+        if isinstance(error, (KeyError, ValueError, TypeError)):
+            return "data_format"
+        if isinstance(error, RuntimeError):
+            return "runtime"
+        return "unknown"
+
+    @staticmethod
+    def _suggest_fix(category: str, error: Exception) -> str:
+        """Return a one-line suggested fix based on error category."""
+        suggestions = {
+            "timeout": "Increase connector timeout or check if the external API is under heavy load. Retry may succeed.",
+            "connection": "External API is unreachable. Check network connectivity and whether the service is up.",
+            "rate_limit": "API rate limit hit. Reduce rate_limit parameter or add longer backoff delays.",
+            "api_client_error": "The request was rejected (4xx). Check URL, parameters, and API docs for breaking changes.",
+            "api_server_error": "External API returned a server error (5xx). This is transient — retry later.",
+            "api_error": "Unexpected API response. Check response format against connector expectations.",
+            "db_constraint": "Database constraint violation. Check unique indexes and foreign keys on the target table.",
+            "db_lock": "Database lock contention. Another task may be writing to the same table concurrently.",
+            "data_format": "Unexpected data shape from the API. A field may be missing or have a different type than expected.",
+            "runtime": "Application logic error. See traceback for the specific failure point.",
+            "unknown": "Unclassified error. See traceback and error message for details.",
+        }
+        return suggestions.get(category, suggestions["unknown"])
+
     def record_error(self, context: str, error: Exception, record_id: str = "") -> None:
-        """Record a non-fatal error. Ingestion continues."""
-        error_entry = {
+        """Record a non-fatal error with full diagnostic detail.
+
+        Captures traceback, HTTP response info (for httpx errors), error
+        classification, and a suggested fix — all stored in the JSONB
+        errors column so the frontend can display a complete diagnostic
+        report suitable for pasting into Claude Code.
+        """
+        category = self._classify_error(error)
+        tb = traceback.format_exception(type(error), error, error.__traceback__)
+        # Keep last 15 frames max to avoid bloating JSONB
+        tb_str = "".join(tb[-15:])
+
+        error_entry: dict[str, Any] = {
             "context": context,
             "error": str(error),
             "type": type(error).__name__,
+            "category": category,
             "record_id": record_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "traceback": tb_str,
+            "suggested_fix": self._suggest_fix(category, error),
         }
+
+        # Capture HTTP details for httpx errors
+        if isinstance(error, httpx.HTTPStatusError):
+            resp = error.response
+            body = ""
+            try:
+                body = resp.text[:2000]
+            except Exception:
+                body = "<unreadable>"
+            error_entry["http"] = {
+                "status_code": resp.status_code,
+                "url": str(resp.url),
+                "method": resp.request.method if resp.request else "GET",
+                "response_body": body,
+                "headers": dict(resp.headers.items())
+                if len(dict(resp.headers)) < 20 else {"note": "too many headers"},
+            }
+        elif isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectError)):
+            req = getattr(error, "request", None)
+            if req:
+                error_entry["http"] = {
+                    "url": str(req.url),
+                    "method": req.method,
+                }
+
         self._errors.append(error_entry)
-        logger.error("Ingestion error [%s] %s: %s", self.get_source_name(), context, error)
+        logger.error(
+            "Ingestion error [%s] %s (%s): %s",
+            self.get_source_name(), context, category, error,
+        )
 
     # ------------------------------------------------------------------
     # Ingestion log tracking
