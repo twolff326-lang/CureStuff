@@ -73,6 +73,7 @@ class BaseConnector(ABC):
         self._records_processed: int = 0
         self._total_expected: int | None = None
         self._log_id: int | None = None
+        self._checkpoint: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -417,32 +418,108 @@ class BaseConnector(ABC):
         self._total_expected = total
         if self._log_id is None:
             return
-        stmt = (
-            update(IngestionLog)
-            .where(IngestionLog.id == self._log_id)
-            .values(total_expected=total)
-        )
-        await session.execute(stmt)
-        await session.commit()
+        try:
+            stmt = (
+                update(IngestionLog)
+                .where(IngestionLog.id == self._log_id)
+                .values(total_expected=total)
+            )
+            await session.execute(stmt)
+            await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "Failed to set total_expected for %s: %s",
+                self.get_source_name(), exc,
+            )
+            try:
+                await session.rollback()
+            except Exception:
+                pass
 
     async def _flush_progress(self, session: AsyncSession) -> None:
         """Flush the current records_processed count to the ingestion log.
 
         Called after every batch so that the live-status API can report
         near-realtime record counts to the frontend.
+
+        Errors are caught and logged rather than propagated — a failed
+        progress update must never crash the entire ingestion pipeline.
         """
         if self._log_id is None:
             return
         values: dict[str, Any] = {"records_processed": self._records_processed}
         if self._total_expected is not None:
             values["total_expected"] = self._total_expected
-        stmt = (
-            update(IngestionLog)
-            .where(IngestionLog.id == self._log_id)
-            .values(**values)
+        try:
+            stmt = (
+                update(IngestionLog)
+                .where(IngestionLog.id == self._log_id)
+                .values(**values)
+            )
+            await session.execute(stmt)
+            await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "Failed to flush progress for %s (records_processed=%d): %s",
+                self.get_source_name(), self._records_processed, exc,
+            )
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Checkpoint helpers (resume after failure)
+    # ------------------------------------------------------------------
+
+    async def _save_checkpoint(
+        self, session: AsyncSession, data: dict[str, Any],
+    ) -> None:
+        """Persist checkpoint data so a retry can resume from this point."""
+        if self._log_id is None:
+            return
+        try:
+            stmt = (
+                update(IngestionLog)
+                .where(IngestionLog.id == self._log_id)
+                .values(checkpoint=data)
+            )
+            await session.execute(stmt)
+            await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "Failed to save checkpoint for %s: %s",
+                self.get_source_name(), exc,
+            )
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+
+    async def _load_previous_checkpoint(
+        self, session: AsyncSession,
+    ) -> dict[str, Any] | None:
+        """Load checkpoint from the most recent failed run for this source.
+
+        Returns the checkpoint dict if one exists, else None.
+        """
+        result = await session.execute(
+            select(IngestionLog.checkpoint)
+            .where(
+                IngestionLog.source == self.get_source_name(),
+                IngestionLog.status == "failed",
+                IngestionLog.checkpoint.isnot(None),
+            )
+            .order_by(IngestionLog.started_at.desc())
+            .limit(1)
         )
-        await session.execute(stmt)
-        await session.commit()
+        row = result.scalar_one_or_none()
+        if row:
+            logger.info(
+                "Loaded checkpoint for %s from previous failed run: %s",
+                self.get_source_name(), row,
+            )
+        return row
 
     # ------------------------------------------------------------------
     # Main run method
@@ -467,13 +544,41 @@ class BaseConnector(ABC):
             session = self._external_session
 
         try:
+            from sqlalchemy import or_, and_
+
+            # Expire stale "running" logs.  If a previous task was killed
+            # (OOM, worker restart, etc.) the log stays "running" forever
+            # and blocks all future runs.  Mark anything running for >2 h
+            # as failed so the duplicate guard below won't mis-fire.
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+            stale_result = await session.execute(
+                select(IngestionLog.id).where(
+                    IngestionLog.source == self.get_source_name(),
+                    IngestionLog.status == "running",
+                    IngestionLog.started_at < stale_cutoff,
+                )
+            )
+            stale_ids = [row[0] for row in stale_result.all()]
+            if stale_ids:
+                await session.execute(
+                    update(IngestionLog)
+                    .where(IngestionLog.id.in_(stale_ids))
+                    .values(
+                        status="failed",
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                )
+                await session.commit()
+                logger.info(
+                    "Expired %d stale 'running' log(s) for %s",
+                    len(stale_ids), self.get_source_name(),
+                )
+
             # Guard: skip if this source is already running OR completed
             # very recently.  Stale Celery retries (persisted in Redis
             # across container restarts) arrive minutes after the fresh
             # run has already finished.  The 10-minute window covers the
             # worst-case retry countdown (4 min) with generous margin.
-            from sqlalchemy import or_, and_
-
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
             existing = await session.execute(
                 select(IngestionLog.id)
@@ -502,6 +607,10 @@ class BaseConnector(ABC):
                     "errors": [],
                     "log_id": None,
                 }
+
+            # Load checkpoint from the most recent failed run (if any)
+            # so connectors can resume rather than restart from scratch.
+            self._checkpoint = await self._load_previous_checkpoint(session)
 
             self._log_id = await self._create_log(session, task_type)
             await session.commit()

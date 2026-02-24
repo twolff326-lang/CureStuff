@@ -62,19 +62,58 @@ class ChEMBLConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     async def fetch_data(self, session: AsyncSession) -> list[dict[str, Any]]:
-        """Run full ChEMBL ingestion pipeline."""
+        """Run full ChEMBL ingestion pipeline.
+
+        Supports resuming from a checkpoint saved by a previous failed run.
+        If the checkpoint says Phase 1 already completed, Phase 1 is skipped
+        entirely and Phase 2 resumes from the last processed drug index.
+        """
         client = await self._get_client()
         owns_client = self._external_client is None
         total = 0
 
+        # Read checkpoint from previous failed run (set by BaseConnector.run)
+        cp = self._checkpoint
+        skip_phase1 = False
+        phase1_saved_count = 0
+        resume_drug_idx = 0
+
+        if cp and cp.get("source") == "chembl":
+            if cp.get("phase1_done"):
+                skip_phase1 = True
+                phase1_saved_count = cp.get("phase1_count", 0)
+                resume_drug_idx = cp.get("phase2_drug_idx", 0)
+                logger.info(
+                    "Resuming ChEMBL from checkpoint: skip Phase 1 "
+                    "(count=%d), Phase 2 from drug idx %d",
+                    phase1_saved_count, resume_drug_idx,
+                )
+
         try:
-            # Phase 1: Fetch approved drug mechanisms and cross-ref to DrugBank
-            mech_count = await self._fetch_approved_mechanisms(session, client)
+            if skip_phase1:
+                mech_count = phase1_saved_count
+                self._records_processed = mech_count
+                await self._flush_progress(session)
+            else:
+                # Phase 1: Fetch approved drug mechanisms
+                mech_count = await self._fetch_approved_mechanisms(
+                    session, client,
+                )
+                # Save checkpoint: Phase 1 done
+                await self._save_checkpoint(session, {
+                    "source": "chembl",
+                    "phase1_done": True,
+                    "phase1_count": mech_count,
+                    "phase2_drug_idx": 0,
+                })
+
             total += mech_count
 
             # Phase 2: Fetch binding affinities for drugs in our database
             affinity_count = await self._fetch_binding_affinities(
-                session, client, phase1_count=mech_count,
+                session, client,
+                phase1_count=mech_count,
+                resume_drug_idx=resume_drug_idx,
             )
             total += affinity_count
 
@@ -237,8 +276,15 @@ class ChEMBLConnector(BaseConnector):
     async def _fetch_binding_affinities(
         self, session: AsyncSession, client: httpx.AsyncClient,
         phase1_count: int = 0,
+        resume_drug_idx: int = 0,
     ) -> int:
-        """Fetch quantitative binding affinities for drugs in our database."""
+        """Fetch quantitative binding affinities for drugs in our database.
+
+        Args:
+            resume_drug_idx: 0-based index into the drug list to resume from.
+                Drugs before this index are skipped (already processed in a
+                previous run).
+        """
         # Get all drugs that have ChEMBL cross-references
         result = await session.execute(
             select(Drug.id, Drug.drugbank_id, Drug.name)
@@ -256,9 +302,22 @@ class ChEMBLConnector(BaseConnector):
             session, phase1_count + len(drugs),
         )
 
+        if resume_drug_idx > 0:
+            logger.info(
+                "Resuming Phase 2 from drug index %d / %d",
+                resume_drug_idx, len(drugs),
+            )
+            # Update progress counter to reflect skipped drugs
+            self._records_processed = phase1_count + resume_drug_idx
+            await self._flush_progress(session)
+
         total_activities = 0
 
         for idx, (drug_id, drugbank_id, drug_name) in enumerate(drugs, 1):
+            # Skip drugs already processed in a previous run
+            if idx <= resume_drug_idx:
+                continue
+
             # Find ChEMBL molecule ID for this drug
             chembl_id = await self._find_chembl_id_for_drug(
                 client, drugbank_id, drug_name
@@ -283,6 +342,13 @@ class ChEMBLConnector(BaseConnector):
             self._records_processed = phase1_count + idx
             if idx % 10 == 0:
                 await self._flush_progress(session)
+                # Save checkpoint so retries skip already-processed drugs
+                await self._save_checkpoint(session, {
+                    "source": "chembl",
+                    "phase1_done": True,
+                    "phase1_count": phase1_count,
+                    "phase2_drug_idx": idx,
+                })
 
         # Final flush for Phase 2
         self._records_processed = phase1_count + len(drugs)
