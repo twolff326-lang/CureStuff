@@ -50,7 +50,7 @@ services:
       - neo4j_data:/data
       - ./neo4j/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_AUTH#*/} 'RETURN 1' || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 15
