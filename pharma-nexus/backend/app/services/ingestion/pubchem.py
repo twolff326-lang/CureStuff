@@ -287,6 +287,8 @@ class PubChemConnector(BaseConnector):
         # Collect unique CIDs that don't have a direct PC{CID} match.
         active_cids_needing_lookup: set[str] = set()
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             cells = row.get("Cell", [])
             if not cells:
                 continue
@@ -307,6 +309,8 @@ class PubChemConnector(BaseConnector):
                 title_resp = await self.http_get(client, title_url)
                 title_data = title_resp.json()
                 for prop in title_data.get("PropertyTable", {}).get("Properties", []):
+                    if not isinstance(prop, dict):
+                        continue
                     pcid = str(prop.get("CID", ""))
                     title = prop.get("Title", "")
                     if title:
@@ -318,6 +322,8 @@ class PubChemConnector(BaseConnector):
 
         records = []
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             cells = row.get("Cell", [])
             if not cells:
                 continue
@@ -404,6 +410,8 @@ class PubChemConnector(BaseConnector):
         col_idx = {name: i for i, name in enumerate(columns)}
         results = []
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             cells = row.get("Cell", [])
             gene_idx = col_idx.get("Target GeneSymbol")
             aid_idx = col_idx.get("AID")

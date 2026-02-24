@@ -333,6 +333,8 @@ class ClinicalTrialsConnector(BaseConnector):
             interventions_raw = arms_mod.get("interventions", [])
             interventions = []
             for intv in interventions_raw:
+                if not isinstance(intv, dict):
+                    continue
                 interventions.append({
                     "type": intv.get("type", ""),
                     "name": intv.get("name", ""),
@@ -360,6 +362,8 @@ class ClinicalTrialsConnector(BaseConnector):
                 measures = outcomes.get("outcomeMeasures", [])
                 summaries = []
                 for measure in measures[:3]:
+                    if not isinstance(measure, dict):
+                        continue
                     measure_title = measure.get("title", "")
                     if measure_title:
                         summaries.append(measure_title)

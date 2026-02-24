@@ -257,6 +257,8 @@ class TCGAConnector(BaseConnector):
             score = hit.get("_score", {})
             if isinstance(score, dict):
                 for proj_entry in score.get("projects", []):
+                    if not isinstance(proj_entry, dict):
+                        continue
                     if proj_entry.get("project_id") == project_id:
                         case_count = proj_entry.get("case_count", 0)
                         break
