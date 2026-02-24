@@ -235,9 +235,9 @@ export default function IngestionCard({
                 </div>
               )}
 
-              {/* Error count — clickable to expand details */}
-              {errorCount > 0 && (
-                <div className="flex items-center gap-2">
+              {/* Error count + report button */}
+              <div className="flex items-center gap-2">
+                {errorCount > 0 && (
                   <button
                     type="button"
                     onClick={() => setErrorsExpanded((v) => !v)}
@@ -253,15 +253,19 @@ export default function IngestionCard({
                       {errorCount} error{errorCount !== 1 ? "s" : ""}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setDiagnosticOpen(true)}
-                    className="rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
-                  >
-                    Full Report
-                  </button>
-                </div>
-              )}
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDiagnosticOpen(true)}
+                  className={`rounded px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                    errorCount > 0
+                      ? "bg-red-100 text-red-700 hover:bg-red-200"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {errorCount > 0 ? "Full Report" : "View Report"}
+                </button>
+              </div>
 
               {/* Expanded inline error preview */}
               {errorsExpanded && errorCount > 0 && (

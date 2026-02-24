@@ -489,6 +489,252 @@ async def get_diagnostic_report(
     }
 
 
+@router.get("/full-report/{source}")
+async def get_full_report(
+    source: str,
+    log_id: int | None = Query(None, description="Specific log ID; defaults to latest"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Comprehensive execution report for any ingestion run.
+
+    Unlike /diagnostic-report (which focuses on errors), this returns
+    everything that happened during the run — phases, HTTP call metrics,
+    data quality stats, cache performance, timeline of events, warnings,
+    and guard decisions — regardless of whether the run had errors.
+
+    Returns both structured JSON and a pre-formatted plain-text report.
+    """
+    if log_id is not None:
+        result = await db.execute(
+            select(IngestionLog).where(
+                IngestionLog.id == log_id,
+                IngestionLog.source == source,
+            )
+        )
+    else:
+        result = await db.execute(
+            select(IngestionLog)
+            .where(IngestionLog.source == source)
+            .order_by(IngestionLog.id.desc())
+            .limit(1)
+        )
+    log = result.scalar_one_or_none()
+    if log is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No ingestion log found for source '{source}'"
+            + (f" with id={log_id}" if log_id else ""),
+        )
+
+    report = log.report or {}
+    errors = log.errors or []
+
+    # ── Duration calculation ──
+    duration = ""
+    if log.duration_seconds:
+        mins = int(log.duration_seconds // 60)
+        rem = int(log.duration_seconds % 60)
+        duration = f"{mins}m {rem}s" if mins else f"{rem}s"
+    elif log.started_at and log.completed_at:
+        secs = (log.completed_at - log.started_at).total_seconds()
+        mins = int(secs // 60)
+        rem = int(secs % 60)
+        duration = f"{mins}m {rem}s" if mins else f"{rem}s"
+    elif log.started_at:
+        from datetime import timezone as tz
+        secs = (datetime.now(tz.utc) - log.started_at).total_seconds()
+        mins = int(secs // 60)
+        rem = int(secs % 60)
+        duration = f"{mins}m {rem}s (still running)" if mins else f"{rem}s (still running)"
+
+    # ── Build the plain-text report ──
+    lines = [
+        f"{'=' * 72}",
+        f"  FULL INGESTION REPORT: {source.upper()}",
+        f"{'=' * 72}",
+        f"",
+        f"Log ID:     {log.id}",
+        f"Status:     {log.status}",
+        f"Records:    {log.records_processed}"
+        + (f" / {log.total_expected}" if log.total_expected else ""),
+        f"Duration:   {duration}",
+        f"Started:    {log.started_at.isoformat() if log.started_at else 'N/A'}",
+        f"Completed:  {log.completed_at.isoformat() if log.completed_at else 'N/A'}",
+        f"Errors:     {len(errors)}",
+        f"Warnings:   {len(report.get('warnings', []))}",
+        f"",
+    ]
+
+    # Summary
+    if report.get("summary"):
+        lines.append(f"Summary: {report['summary']}")
+        lines.append("")
+
+    # ── Guard Decisions ──
+    guards = report.get("guard_decisions", {})
+    if guards:
+        lines.append(f"{'─' * 72}")
+        lines.append("GUARD DECISIONS")
+        lines.append(f"{'─' * 72}")
+        lines.append(f"  Stale logs expired:    {guards.get('stale_logs_expired', 'N/A')}")
+        lines.append(f"  Duplicate check:       {guards.get('duplicate_check_result', 'N/A')}")
+        cp = guards.get("checkpoint_loaded")
+        lines.append(f"  Checkpoint loaded:     {cp if cp else 'None'}")
+        lines.append("")
+
+    # ── Phases ──
+    phases = report.get("phases", [])
+    if phases:
+        lines.append(f"{'─' * 72}")
+        lines.append("PHASES")
+        lines.append(f"{'─' * 72}")
+        for i, phase in enumerate(phases, 1):
+            lines.append(f"  [{i}] {phase.get('name', '?')}")
+            lines.append(f"      Status:      {phase.get('status', '?')}")
+            lines.append(f"      Duration:    {phase.get('duration_s', '?')}s")
+            lines.append(f"      Records in:  {phase.get('records_in', '?')}")
+            lines.append(f"      Records out: {phase.get('records_out', '?')}")
+            if phase.get("detail"):
+                lines.append(f"      Detail:      {phase['detail']}")
+            lines.append("")
+
+    # ── HTTP Stats ──
+    http = report.get("http", {})
+    if http:
+        lines.append(f"{'─' * 72}")
+        lines.append("HTTP STATS")
+        lines.append(f"{'─' * 72}")
+        lines.append(f"  Total requests:  {http.get('total_requests', 0)}")
+        lines.append(f"  Successful:      {http.get('successful', 0)}")
+        lines.append(f"  Retries:         {http.get('retries', 0)}")
+        lines.append(f"  Failures:        {http.get('failures', 0)}")
+        lines.append(f"  Latency (avg):   {http.get('latency_avg_ms', 'N/A')} ms")
+        lines.append(f"  Latency (p50):   {http.get('latency_p50_ms', 'N/A')} ms")
+        lines.append(f"  Latency (p95):   {http.get('latency_p95_ms', 'N/A')} ms")
+        lines.append(f"  Latency (p99):   {http.get('latency_p99_ms', 'N/A')} ms")
+        lines.append(f"  Latency (max):   {http.get('latency_max_ms', 'N/A')} ms")
+        slowest = http.get("slowest_call")
+        if slowest:
+            lines.append(f"  Slowest call:    {slowest.get('latency_ms', '?')}ms "
+                         f"({slowest.get('status_code', '?')}) {slowest.get('url', '?')}")
+
+        by_status = http.get("by_status_code", {})
+        if by_status:
+            lines.append(f"  By status code:  {by_status}")
+
+        by_domain = http.get("by_domain", {})
+        if by_domain:
+            lines.append(f"  By domain:")
+            for domain, stats in by_domain.items():
+                avg = round(stats["total_ms"] / stats["requests"], 1) if stats["requests"] else 0
+                lines.append(f"    {domain}: {stats['requests']} reqs, avg {avg}ms")
+        lines.append("")
+
+    # ── Data Quality ──
+    dq = report.get("data_quality", {})
+    if dq:
+        lines.append(f"{'─' * 72}")
+        lines.append("DATA QUALITY")
+        lines.append(f"{'─' * 72}")
+        lines.append(f"  API records received:     {dq.get('total_api_records_received', 0)}")
+        lines.append(f"  Skipped (non-dict):       {dq.get('skipped_non_dict', 0)}")
+        lines.append(f"  Skipped (missing field):  {dq.get('skipped_missing_field', 0)}")
+        lines.append(f"  Skipped (filtered):       {dq.get('skipped_filtered', 0)}")
+        lines.append(f"  Skipped (duplicate):      {dq.get('skipped_duplicate', 0)}")
+        lines.append(f"  Records upserted:         {dq.get('records_upserted', 0)}")
+        lines.append(f"  Records inserted:         {dq.get('records_inserted', 0)}")
+        lines.append("")
+
+    # ── DB Operations ──
+    db_ops = report.get("db_operations", {})
+    if db_ops:
+        lines.append(f"{'─' * 72}")
+        lines.append("DB OPERATIONS")
+        lines.append(f"{'─' * 72}")
+        lines.append(f"  Batch upsert calls:  {db_ops.get('batch_upsert_calls', 0)}")
+        lines.append(f"  Batch insert calls:  {db_ops.get('batch_insert_calls', 0)}")
+        lines.append(f"  Total rows written:  {db_ops.get('total_rows_written', 0)}")
+        lines.append("")
+
+    # ── Caches ──
+    caches = report.get("caches", {})
+    if caches:
+        lines.append(f"{'─' * 72}")
+        lines.append("CACHES")
+        lines.append(f"{'─' * 72}")
+        for name, stats in caches.items():
+            parts = [f"{k}={v}" for k, v in stats.items()]
+            lines.append(f"  {name}: {', '.join(parts)}")
+        lines.append("")
+
+    # ── Warnings ──
+    warnings = report.get("warnings", [])
+    if warnings:
+        lines.append(f"{'─' * 72}")
+        lines.append(f"WARNINGS ({len(warnings)})")
+        lines.append(f"{'─' * 72}")
+        for w in warnings:
+            lines.append(f"  [{w.get('elapsed_s', '?')}s] [{w.get('context', '?')}] {w.get('message', '')}")
+        lines.append("")
+
+    # ── Errors (summary) ──
+    if errors:
+        by_category: dict[str, int] = {}
+        for err in errors:
+            cat = err.get("category", "unknown")
+            by_category[cat] = by_category.get(cat, 0) + 1
+
+        lines.append(f"{'─' * 72}")
+        lines.append(f"ERRORS ({len(errors)})")
+        lines.append(f"{'─' * 72}")
+        for cat, count in sorted(by_category.items(), key=lambda x: -x[1]):
+            lines.append(f"  {cat}: {count}x")
+        lines.append("")
+
+        # Show first 20 error details
+        for i, err in enumerate(errors[:20], 1):
+            lines.append(f"  [{i}] [{err.get('category', '?')}] {err.get('context', '?')}: "
+                         f"{err.get('error', '?')[:200]}")
+            if err.get("record_id"):
+                lines.append(f"      Record: {err['record_id']}")
+        if len(errors) > 20:
+            lines.append(f"  ... and {len(errors) - 20} more errors")
+        lines.append("")
+
+    # ── Timeline ──
+    timeline = report.get("timeline", [])
+    if timeline:
+        lines.append(f"{'─' * 72}")
+        lines.append(f"TIMELINE ({len(timeline)} events)")
+        lines.append(f"{'─' * 72}")
+        for entry in timeline:
+            lines.append(
+                f"  [{entry.get('elapsed_s', '?'):>8}s] "
+                f"{entry.get('event', '?')}"
+                + (f"  {entry.get('detail', '')}" if entry.get("detail") else "")
+            )
+        lines.append("")
+
+    lines.append(f"{'=' * 72}")
+    plain_text_report = "\n".join(lines)
+
+    return {
+        "source": source,
+        "log_id": log.id,
+        "status": log.status,
+        "records_processed": log.records_processed,
+        "total_expected": log.total_expected,
+        "started_at": log.started_at.isoformat() if log.started_at else None,
+        "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+        "duration": duration,
+        "total_errors": len(errors),
+        "total_warnings": len(report.get("warnings", [])),
+        "report": report,
+        "errors": errors[:200],
+        "plain_text_report": plain_text_report,
+    }
+
+
 @router.get("/logs")
 async def get_ingestion_logs(
     source: str | None = Query(None, description="Filter by source name"),

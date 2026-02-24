@@ -57,6 +57,10 @@ class IngestionLog(Base):
         JSONB, nullable=True,
         comment="Resume checkpoint for long-running connectors (phase, offset, etc.)",
     )
+    report = Column(
+        JSONB, nullable=True,
+        comment="Comprehensive execution report: phases, HTTP stats, data quality, timeline, warnings",
+    )
 
     __table_args__ = (
         Index("ix_ingestion_logs_errors", "errors", postgresql_using="gin"),

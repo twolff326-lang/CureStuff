@@ -146,10 +146,11 @@ class CBioPortalConnector(BaseConnector):
         )
         all_studies = resp.json()
 
-        # Filter to TCGA studies (studyId ends with "_tcga")
+        # Filter to TCGA studies (studyId ends with "_tcga").
+        # Skip non-dict entries the API may return.
         tcga_studies = [
             s for s in all_studies
-            if s.get("studyId", "").endswith("_tcga")
+            if isinstance(s, dict) and s.get("studyId", "").endswith("_tcga")
         ]
         logger.info(
             "Found %d TCGA studies out of %d total",
@@ -221,9 +222,13 @@ class CBioPortalConnector(BaseConnector):
 
                 profile_map: dict[str, str] = {}
                 for p in profiles:
+                    if not isinstance(p, dict):
+                        continue
                     mol_type = p.get("molecularAlterationType", "")
                     data_type = p.get("datatype", "")
-                    pid = p["molecularProfileId"]
+                    pid = p.get("molecularProfileId", "")
+                    if not pid:
+                        continue
 
                     if mol_type == "MUTATION_EXTENDED":
                         profile_map["mutations"] = pid
@@ -302,7 +307,10 @@ class CBioPortalConnector(BaseConnector):
         # Aggregate: count mutations per gene + protein change
         gene_mutation_counts: dict[str, dict[str, Any]] = {}
         for m in all_mutations:
-            gene = m.get("gene", {}).get("hugoGeneSymbol", "")
+            if not isinstance(m, dict):
+                continue
+            gene_info = m.get("gene")
+            gene = gene_info.get("hugoGeneSymbol", "") if isinstance(gene_info, dict) else ""
             if not gene:
                 continue
 
@@ -419,7 +427,10 @@ class CBioPortalConnector(BaseConnector):
         # Aggregate per gene: collect values, compute summary stats
         gene_values: dict[str, list[float]] = {}
         for entry in data:
-            gene = entry.get("gene", {}).get("hugoGeneSymbol", "")
+            if not isinstance(entry, dict):
+                continue
+            gene_info = entry.get("gene")
+            gene = gene_info.get("hugoGeneSymbol", "") if isinstance(gene_info, dict) else ""
             value = entry.get("value")
             if gene and value is not None and not (isinstance(value, float) and math.isnan(value)):
                 gene_values.setdefault(gene, []).append(float(value))
@@ -527,7 +538,10 @@ class CBioPortalConnector(BaseConnector):
         # Aggregate: count amp (value=2) and del (value=-2) per gene
         gene_alterations: dict[str, dict[str, set]] = {}
         for entry in all_cna:
-            gene = entry.get("gene", {}).get("hugoGeneSymbol", "")
+            if not isinstance(entry, dict):
+                continue
+            gene_info = entry.get("gene")
+            gene = gene_info.get("hugoGeneSymbol", "") if isinstance(gene_info, dict) else ""
             value = entry.get("alteration")
             sample = entry.get("sampleId", "")
             if not gene or value is None:
@@ -604,7 +618,7 @@ class CBioPortalConnector(BaseConnector):
                 headers=self._headers,
             )
             samples = resp.json()
-            ids = [s["sampleId"] for s in samples]
+            ids = [s["sampleId"] for s in samples if isinstance(s, dict) and "sampleId" in s]
             self._sample_cache[study_id] = ids
             return ids
         except Exception as exc:
