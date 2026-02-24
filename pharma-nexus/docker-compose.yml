@@ -40,7 +40,6 @@ services:
     container_name: pharma-nexus-neo4j
     environment:
       NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change_me_in_production}
-      NEO4J_PLUGINS: '["apoc"]'
     ports:
       - "7474:7474"
       - "7687:7687"
