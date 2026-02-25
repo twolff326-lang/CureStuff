@@ -55,6 +55,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<HypothesisStats | null>(null);
   const [topHypotheses, setTopHypotheses] = useState<Hypothesis[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -69,8 +70,9 @@ export default function DashboardPage() {
         setCancerCount(cancers.count);
         setStats(hStats);
         setTopHypotheses(topH);
-      } catch (e) {
+      } catch (e: any) {
         console.error("Dashboard load error:", e);
+        setError(e.message || "Failed to load dashboard data");
       } finally {
         setLoading(false);
       }
@@ -101,6 +103,14 @@ export default function DashboardPage() {
           Drug repurposing discovery overview
         </p>
       </div>
+
+      {error && (
+        <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-200">
+          <p className="text-sm text-red-700">
+            Failed to load dashboard data: {error}. Is the backend running?
+          </p>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

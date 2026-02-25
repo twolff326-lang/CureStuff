@@ -13,10 +13,12 @@ Scores each hypothesis on 3 dimensions:
 Composite = weighted average (target: 0.40, pathway: 0.35, clinical: 0.25)
 """
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.drug import Drug
 from app.models.target import Target
@@ -137,27 +139,37 @@ class HypothesisEngine:
         total = len(drugs) * len(cancer_types)
         await self._update_log(total_expected=total)
 
+        # Pre-load all DrugTargets with joined Targets in one query (fixes N+1)
+        all_drug_targets = (await self.db.execute(
+            select(DrugTarget).options(selectinload(DrugTarget.target))
+        )).scalars().all()
+
+        # Group by drug_id
+        drug_targets_map: dict[int, list[DrugTarget]] = defaultdict(list)
+        drug_target_genes_map: dict[int, set[str]] = defaultdict(set)
+        for dt in all_drug_targets:
+            drug_targets_map[dt.drug_id].append(dt)
+            if dt.target and dt.target.gene_symbol:
+                drug_target_genes_map[dt.drug_id].add(dt.target.gene_symbol)
+
+        # Pre-load all Mutations grouped by cancer_type_id (fixes N+1)
+        all_mutations = (await self.db.execute(select(Mutation))).scalars().all()
+        mutations_map: dict[int, list[Mutation]] = defaultdict(list)
+        for m in all_mutations:
+            mutations_map[m.cancer_type_id].append(m)
+
         generated = 0
         processed = 0
 
         for drug in drugs:
-            # Get drug's targets
-            drug_targets = (await self.db.execute(
-                select(DrugTarget).where(DrugTarget.drug_id == drug.id)
-            )).scalars().all()
-
-            target_genes = set()
-            for dt in drug_targets:
-                t = (await self.db.execute(
-                    select(Target).where(Target.id == dt.target_id)
-                )).scalar_one_or_none()
-                if t:
-                    target_genes.add(t.gene_symbol)
+            drug_targets = drug_targets_map.get(drug.id, [])
+            target_genes = drug_target_genes_map.get(drug.id, set())
 
             for cancer in cancer_types:
                 try:
+                    mutations = mutations_map.get(cancer.id, [])
                     hypothesis = await self._evaluate_pair(
-                        drug, cancer, drug_targets, target_genes
+                        drug, cancer, drug_targets, target_genes, mutations
                     )
                     if hypothesis:
                         generated += 1
@@ -181,13 +193,9 @@ class HypothesisEngine:
         cancer: CancerType,
         drug_targets: list[DrugTarget],
         target_genes: set[str],
+        mutations: list[Mutation],
     ) -> Hypothesis | None:
         """Evaluate a drug-cancer pair and create hypothesis if score is sufficient."""
-
-        # Get cancer mutations
-        mutations = (await self.db.execute(
-            select(Mutation).where(Mutation.cancer_type_id == cancer.id)
-        )).scalars().all()
         mutated_genes = {m.gene_symbol for m in mutations}
 
         # Strategy 1: Direct Target
@@ -283,12 +291,15 @@ class HypothesisEngine:
 
         score = 0.0
 
-        # Base score from binding affinity
+        # Base score from binding affinity (normalize to nM)
         best_affinity = None
         for dt in drug_targets:
             if dt.binding_affinity and dt.binding_affinity > 0:
-                if best_affinity is None or dt.binding_affinity < best_affinity:
-                    best_affinity = dt.binding_affinity
+                affinity = dt.binding_affinity
+                if dt.affinity_units == "uM":
+                    affinity *= 1000  # Convert uM to nM
+                if best_affinity is None or affinity < best_affinity:
+                    best_affinity = affinity
 
         if best_affinity:
             # Lower affinity (nM) = better binding = higher score

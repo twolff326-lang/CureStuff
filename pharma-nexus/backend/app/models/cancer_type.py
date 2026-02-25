@@ -19,8 +19,8 @@ class CancerType(Base):
     )
 
     mutations: Mapped[list["Mutation"]] = relationship(
-        "Mutation", back_populates="cancer_type", lazy="selectin"
+        "Mutation", back_populates="cancer_type"
     )
     hypotheses: Mapped[list["Hypothesis"]] = relationship(
-        "Hypothesis", back_populates="cancer_type", lazy="selectin"
+        "Hypothesis", back_populates="cancer_type"
     )

@@ -6,6 +6,7 @@ chemical properties (SMILES, molecular formula, weight, CID).
 """
 import asyncio
 import logging
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import select
@@ -86,7 +87,7 @@ class PubChemConnector(BaseConnector):
 
     async def _fetch_compound(self, client: httpx.AsyncClient, name: str) -> dict | None:
         """Fetch compound properties from PubChem by drug name."""
-        url = f"{PUBCHEM_BASE}/compound/name/{name}/property/MolecularFormula,MolecularWeight,CanonicalSMILES,IsomericSMILES,IUPACName/JSON"
+        url = f"{PUBCHEM_BASE}/compound/name/{quote(name)}/property/MolecularFormula,MolecularWeight,CanonicalSMILES,IsomericSMILES,IUPACName/JSON"
         data = await self._fetch_json(client, url)
         if not data:
             return None

@@ -1,4 +1,4 @@
-.PHONY: up down build logs test migrate seed clean status
+.PHONY: up down build logs test migrate clean status docs restart-backend
 
 # Start all services
 up:
@@ -18,15 +18,11 @@ logs:
 
 # View backend logs only
 logs-backend:
-	docker compose logs -f --tail=100 backend celery-worker
+	docker compose logs -f --tail=100 backend
 
 # Run database migrations
 migrate:
 	docker compose exec backend alembic upgrade head
-
-# Seed initial data
-seed:
-	docker compose exec backend python scripts/seed_data.py
 
 # Run backend tests
 test:
@@ -50,8 +46,4 @@ docs:
 
 # Quick restart backend only
 restart-backend:
-	docker compose restart backend celery-worker
-
-# Export hypotheses (JSON)
-export:
-	@curl -s "http://localhost:8000/api/export/summary/stats" | python -m json.tool
+	docker compose restart backend

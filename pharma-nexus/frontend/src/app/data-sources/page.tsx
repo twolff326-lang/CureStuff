@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
 import { IngestionLog } from "@/types";
 
@@ -77,10 +77,13 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    const t = setTimeout(onClose, 5000);
+    const t = setTimeout(() => onCloseRef.current(), 5000);
     return () => clearTimeout(t);
-  }, [onClose]);
+  }, []);
 
   return (
     <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
