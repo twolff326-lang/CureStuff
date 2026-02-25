@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -8,6 +8,9 @@ from app.database import Base
 
 class Mutation(Base):
     __tablename__ = "mutations"
+    __table_args__ = (
+        UniqueConstraint("cancer_type_id", "gene_symbol", name="uq_mutation_cancer_gene"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     cancer_type_id: Mapped[int] = mapped_column(

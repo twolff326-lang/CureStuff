@@ -25,8 +25,8 @@ class Drug(Base):
     )
 
     targets: Mapped[list["DrugTarget"]] = relationship(
-        "DrugTarget", back_populates="drug", lazy="selectin"
+        "DrugTarget", back_populates="drug"
     )
     hypotheses: Mapped[list["Hypothesis"]] = relationship(
-        "Hypothesis", back_populates="drug", lazy="selectin"
+        "Hypothesis", back_populates="drug"
     )

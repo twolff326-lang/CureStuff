@@ -16,6 +16,5 @@ venv/
 .env
 .env.*
 *.md
-tests/
 Dockerfile
 .dockerignore

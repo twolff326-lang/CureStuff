@@ -41,6 +41,7 @@ function ScoreBar({
 
 export default function HypothesisDetailPage() {
   const params = useParams();
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const [hypothesis, setHypothesis] = useState<Hypothesis | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +49,7 @@ export default function HypothesisDetailPage() {
   useEffect(() => {
     async function load() {
       try {
-        const h = await fetchApi<Hypothesis>(`/api/hypotheses/${params.id}`);
+        const h = await fetchApi<Hypothesis>(`/api/hypotheses/${id}`);
         setHypothesis(h);
       } catch (e: any) {
         setError(e.message || "Failed to load hypothesis");
@@ -56,8 +57,8 @@ export default function HypothesisDetailPage() {
         setLoading(false);
       }
     }
-    if (params.id) load();
-  }, [params.id]);
+    if (id) load();
+  }, [id]);
 
   if (loading) {
     return (

@@ -10,6 +10,11 @@ from app.models.cancer_type import CancerType
 
 router = APIRouter()
 
+ALLOWED_SORTS = {
+    "composite_score", "target_binding_score", "pathway_overlap_score",
+    "clinical_evidence_score", "created_at",
+}
+
 
 @router.get("")
 async def list_hypotheses(
@@ -35,7 +40,9 @@ async def list_hypotheses(
 
     total = (await db.execute(count_query)).scalar()
 
-    sort_col = getattr(Hypothesis, sort_by, Hypothesis.composite_score)
+    if sort_by not in ALLOWED_SORTS:
+        sort_by = "composite_score"
+    sort_col = getattr(Hypothesis, sort_by)
     result = await db.execute(
         query.order_by(sort_col.desc()).offset((page - 1) * per_page).limit(per_page)
     )

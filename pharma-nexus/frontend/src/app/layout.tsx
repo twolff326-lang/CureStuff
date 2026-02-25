@@ -14,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
+      <body className="font-sans">
         <div className="flex h-screen">
           <Sidebar />
           <main className="flex-1 overflow-y-auto bg-slate-50 p-8">

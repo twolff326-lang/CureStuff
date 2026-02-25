@@ -19,5 +19,5 @@ class Pathway(Base):
     )
 
     targets: Mapped[list["PathwayTarget"]] = relationship(
-        "PathwayTarget", back_populates="pathway", lazy="selectin"
+        "PathwayTarget", back_populates="pathway"
     )
