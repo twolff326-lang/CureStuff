@@ -1,836 +1,384 @@
-"""Core drug repurposing hypothesis discovery engine.
+"""Hypothesis generation engine.
 
-The HEART of Pharma Nexus. Cross-references drug targets, cancer molecular
-profiles, pathways, literature, and expression data to generate scored
-repurposing hypotheses.
+Generates drug repurposing hypotheses using 3 strategies:
+  1. Direct Target — drug's target gene is mutated in the cancer type
+  2. Pathway Mediated — drug's target and cancer's mutations share a pathway
+  3. Literature/Clinical — known clinical evidence (approval status, trials)
 
-6 Discovery Strategies:
-  1. direct_target      — Drug targets a gene mutated/altered in the cancer
-  2. pathway_mediated   — Drug targets a gene in a pathway dysregulated in the cancer
-  3. interaction_network — Drug target interacts with cancer-altered proteins (PPI)
-  4. expression_driven  — Drug action matches expression changes in the cancer
-  5. literature_seeded  — Literature mentions drug + cancer in repurposing context
-  6. analog_discovery   — Similar drugs (by mechanism embedding) target related cancers
+Scores each hypothesis on 3 dimensions:
+  - target_binding_score: strength of drug-target binding (0-100)
+  - pathway_overlap_score: pathway connectivity between drug target and cancer (0-100)
+  - clinical_evidence_score: known clinical relevance (0-100)
 
-Pipeline:
-  1. Identify candidates (drug-cancer pairs) via strategies
-  2. Score all 6 evidence dimensions via EvidenceScorer
-  3. Compute weighted composite score via ScoringConfig
-  4. Assemble evidence records
-  5. Store hypotheses in database (upsert on drug_id + cancer_type_id)
+Composite = weighted average (target: 0.40, pathway: 0.35, clinical: 0.25)
 """
-
 import logging
-from typing import Any
+from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.cancer_type import CancerMolecularProfile, CancerType
-from app.models.clinical_trial import ClinicalTrial
-from app.models.drug import Drug, DrugTarget, LiteratureDrug, TrialDrug
-from app.models.hypothesis import Hypothesis, HypothesisEvidence
-from app.models.literature import Literature, LiteratureCancer
-from app.models.mutation import Mutation
-from app.models.pathway import PathwayTarget
+from app.models.drug import Drug
 from app.models.target import Target
-from app.services.evidence_scorer import EvidenceScorer
-from app.services.pathway_analyzer import PathwayAnalyzer
-from app.services.scoring_config import ScoringConfig
+from app.models.drug_target import DrugTarget
+from app.models.cancer_type import CancerType
+from app.models.mutation import Mutation
+from app.models.pathway import Pathway
+from app.models.pathway_target import PathwayTarget
+from app.models.hypothesis import Hypothesis
+from app.models.ingestion_log import IngestionLog
 
 logger = logging.getLogger(__name__)
 
+# Scoring weights
+W_TARGET = 0.40
+W_PATHWAY = 0.35
+W_CLINICAL = 0.25
+
+# Known drug-cancer pairs with established clinical evidence
+# (drug_name_lower, cancer_name_fragment) -> clinical_score_boost
+KNOWN_PAIRS = {
+    ("imatinib", "chronic myeloid"): 95,
+    ("imatinib", "gastrointestinal stromal"): 90,
+    ("tamoxifen", "breast"): 95,
+    ("letrozole", "breast"): 90,
+    ("anastrozole", "breast"): 85,
+    ("exemestane", "breast"): 80,
+    ("fulvestrant", "breast"): 85,
+    ("trastuzumab", "breast"): 90,
+    ("pertuzumab", "breast"): 85,
+    ("erlotinib", "non-small cell lung"): 85,
+    ("gefitinib", "non-small cell lung"): 85,
+    ("osimertinib", "non-small cell lung"): 90,
+    ("afatinib", "non-small cell lung"): 80,
+    ("crizotinib", "non-small cell lung"): 85,
+    ("alectinib", "non-small cell lung"): 85,
+    ("vemurafenib", "melanoma"): 90,
+    ("dabrafenib", "melanoma"): 85,
+    ("trametinib", "melanoma"): 85,
+    ("pembrolizumab", "melanoma"): 90,
+    ("nivolumab", "melanoma"): 85,
+    ("ipilimumab", "melanoma"): 80,
+    ("enzalutamide", "prostate"): 85,
+    ("abiraterone", "prostate"): 85,
+    ("olaparib", "ovarian"): 85,
+    ("rucaparib", "ovarian"): 80,
+    ("niraparib", "ovarian"): 80,
+    ("bevacizumab", "colorectal"): 80,
+    ("regorafenib", "colorectal"): 75,
+    ("sorafenib", "hepatocellular"): 80,
+    ("lenvatinib", "hepatocellular"): 80,
+    ("everolimus", "renal"): 80,
+    ("sunitinib", "renal"): 85,
+    ("axitinib", "renal"): 80,
+    ("cabozantinib", "renal"): 80,
+    ("palbociclib", "breast"): 85,
+    ("ribociclib", "breast"): 80,
+    ("abemaciclib", "breast"): 80,
+    ("ibrutinib", "chronic lymphocytic"): 90,
+    ("venetoclax", "chronic lymphocytic"): 85,
+    ("acalabrutinib", "chronic lymphocytic"): 80,
+    ("rituximab", "diffuse large b-cell"): 85,
+    ("bortezomib", "multiple myeloma"): 90,
+    ("lenalidomide", "multiple myeloma"): 85,
+    ("carfilzomib", "multiple myeloma"): 80,
+    ("pomalidomide", "multiple myeloma"): 75,
+    ("temozolomide", "glioblastoma"): 80,
+    ("gemcitabine", "pancreatic"): 80,
+    ("cisplatin", "bladder"): 75,
+    ("vismodegib", "basal cell"): 80,
+    ("gilteritinib", "acute myeloid"): 80,
+    ("midostaurin", "acute myeloid"): 75,
+    ("sotorasib", "non-small cell lung"): 80,
+    ("larotrectinib", "sarcoma"): 70,
+    ("entrectinib", "non-small cell lung"): 75,
+    ("trastuzumab", "gastric"): 75,
+    ("fluorouracil", "colorectal"): 80,
+    ("doxorubicin", "breast"): 75,
+    ("paclitaxel", "breast"): 80,
+    ("paclitaxel", "ovarian"): 80,
+    ("cisplatin", "ovarian"): 80,
+    ("carboplatin", "ovarian"): 80,
+    ("docetaxel", "prostate"): 75,
+    ("docetaxel", "breast"): 75,
+    ("capecitabine", "colorectal"): 75,
+    ("oxaliplatin", "colorectal"): 80,
+    ("irinotecan", "colorectal"): 75,
+    ("pemetrexed", "non-small cell lung"): 75,
+    ("cisplatin", "non-small cell lung"): 70,
+    ("carboplatin", "non-small cell lung"): 70,
+    ("atezolizumab", "non-small cell lung"): 80,
+    ("durvalumab", "non-small cell lung"): 75,
+    ("nivolumab", "renal"): 80,
+    ("pembrolizumab", "non-small cell lung"): 85,
+    ("erdafitinib", "bladder"): 75,
+    ("encorafenib", "colorectal"): 70,
+    ("alpelisib", "breast"): 75,
+    ("tazemetostat", "sarcoma"): 70,
+    ("infigratinib", "cholangiocarcinoma"): 70,
+    ("pemigatinib", "cholangiocarcinoma"): 70,
+    ("futibatinib", "cholangiocarcinoma"): 70,
+    ("ivosidenib", "cholangiocarcinoma"): 75,
+    ("ivosidenib", "acute myeloid"): 75,
+    ("enasidenib", "acute myeloid"): 70,
+}
+
 
 class HypothesisEngine:
-    """Core engine for generating drug repurposing hypotheses.
+    def __init__(self, db: AsyncSession, log_id: int):
+        self.db = db
+        self.log_id = log_id
 
-    Orchestrates candidate identification, multi-dimensional scoring,
-    evidence assembly, and hypothesis storage.
-    """
+    async def generate_all(self):
+        """Generate hypotheses for all drug-cancer combinations."""
+        drugs = (await self.db.execute(select(Drug))).scalars().all()
+        cancer_types = (await self.db.execute(select(CancerType))).scalars().all()
 
-    def __init__(self):
-        self.scorer = EvidenceScorer()
-        self.config = ScoringConfig()
+        total = len(drugs) * len(cancer_types)
+        await self._update_log(total_expected=total)
 
-    # ==================================================================
-    # Main Entry Points
-    # ==================================================================
+        generated = 0
+        processed = 0
 
-    async def generate_for_cancer(
-        self,
-        cancer_type_id: int,
-        db: AsyncSession,
-        min_score: float = 15.0,
-    ) -> list[dict[str, Any]]:
-        """Generate hypotheses for all drugs against a specific cancer type.
+        for drug in drugs:
+            # Get drug's targets
+            drug_targets = (await self.db.execute(
+                select(DrugTarget).where(DrugTarget.drug_id == drug.id)
+            )).scalars().all()
 
-        This is the primary batch generation method. It:
-        1. Identifies candidate drugs via all 6 strategies
-        2. Scores each candidate
-        3. Stores hypotheses above min_score threshold
-        """
-        logger.info("Generating hypotheses for cancer_type_id=%d", cancer_type_id)
+            target_genes = set()
+            for dt in drug_targets:
+                t = (await self.db.execute(
+                    select(Target).where(Target.id == dt.target_id)
+                )).scalar_one_or_none()
+                if t:
+                    target_genes.add(t.gene_symbol)
 
-        # Identify candidates from all strategies
-        candidates = await self._identify_candidates_for_cancer(
-            cancer_type_id, db
-        )
-        logger.info(
-            "Found %d candidate drug-cancer pairs for cancer_type_id=%d",
-            len(candidates), cancer_type_id,
-        )
-
-        # Get active scoring weights
-        weights = await self.config.get_active_weights(db)
-
-        # Score and store each candidate
-        results = []
-        for i, candidate in enumerate(candidates):
-            drug_id = candidate["drug_id"]
-            try:
-                hypothesis = await self._score_and_store_hypothesis(
-                    drug_id=drug_id,
-                    cancer_type_id=cancer_type_id,
-                    strategies=candidate["strategies"],
-                    weights=weights,
-                    db=db,
-                )
-                if hypothesis and hypothesis.get("composite_score", 0) >= min_score:
-                    results.append(hypothesis)
-
-                if (i + 1) % 50 == 0:
-                    await db.commit()
-                    logger.info(
-                        "Scored %d/%d candidates for cancer_type_id=%d",
-                        i + 1, len(candidates), cancer_type_id,
+            for cancer in cancer_types:
+                try:
+                    hypothesis = await self._evaluate_pair(
+                        drug, cancer, drug_targets, target_genes
                     )
+                    if hypothesis:
+                        generated += 1
+                except Exception as e:
+                    logger.warning(f"Error evaluating {drug.name} + {cancer.name}: {e}")
 
-            except Exception as e:
-                logger.debug(
-                    "Failed scoring drug=%d cancer=%d: %s",
-                    drug_id, cancer_type_id, e,
-                )
+                processed += 1
+                if processed % 100 == 0:
+                    await self._update_log(records_processed=generated)
 
-        await db.commit()
-        logger.info(
-            "Generated %d hypotheses for cancer_type_id=%d (threshold=%.1f)",
-            len(results), cancer_type_id, min_score,
+        await self._update_log(
+            status="completed",
+            records_processed=generated,
+            completed_at=datetime.now(timezone.utc),
         )
-        return results
+        logger.info(f"Hypothesis generation complete: {generated} hypotheses from {processed} pairs")
 
-    async def generate_for_drug(
+    async def _evaluate_pair(
         self,
-        drug_id: int,
-        db: AsyncSession,
-        min_score: float = 15.0,
-    ) -> list[dict[str, Any]]:
-        """Generate hypotheses for a specific drug against all cancer types."""
-        logger.info("Generating hypotheses for drug_id=%d", drug_id)
+        drug: Drug,
+        cancer: CancerType,
+        drug_targets: list[DrugTarget],
+        target_genes: set[str],
+    ) -> Hypothesis | None:
+        """Evaluate a drug-cancer pair and create hypothesis if score is sufficient."""
 
-        # Get all cancer types
-        cancer_result = await db.execute(select(CancerType.id))
-        cancer_ids = [row[0] for row in cancer_result.all()]
+        # Get cancer mutations
+        mutations = (await self.db.execute(
+            select(Mutation).where(Mutation.cancer_type_id == cancer.id)
+        )).scalars().all()
+        mutated_genes = {m.gene_symbol for m in mutations}
 
-        weights = await self.config.get_active_weights(db)
-        results = []
+        # Strategy 1: Direct Target
+        strategy = None
+        direct_overlap = target_genes & mutated_genes
+        if direct_overlap:
+            strategy = "direct_target"
 
-        for cid in cancer_ids:
-            try:
-                # Check if drug has any relevance to this cancer
-                strategies = await self._identify_strategies_for_pair(
-                    drug_id, cid, db
-                )
-                if not strategies:
-                    continue
+        # Strategy 2: Pathway Mediated
+        pathway_score_raw = 0.0
+        if target_genes:
+            pathway_score_raw = await self._score_pathway_overlap(target_genes, mutated_genes)
+            if not strategy and pathway_score_raw > 20:
+                strategy = "pathway"
 
-                hypothesis = await self._score_and_store_hypothesis(
-                    drug_id=drug_id,
-                    cancer_type_id=cid,
-                    strategies=strategies,
-                    weights=weights,
-                    db=db,
-                )
-                if hypothesis and hypothesis.get("composite_score", 0) >= min_score:
-                    results.append(hypothesis)
+        # Strategy 3: Clinical Evidence
+        clinical_score = self._score_clinical_evidence(drug, cancer)
+        if not strategy and clinical_score > 50:
+            strategy = "clinical"
 
-            except Exception as e:
-                logger.debug(
-                    "Failed scoring drug=%d cancer=%d: %s",
-                    drug_id, cid, e,
-                )
+        # If no strategy found a link, skip this pair
+        if not strategy:
+            return None
 
-        await db.commit()
-        logger.info(
-            "Generated %d hypotheses for drug_id=%d", len(results), drug_id
-        )
-        return results
+        # Score dimensions
+        target_score = self._score_target_binding(drug_targets, direct_overlap, mutations)
+        pathway_score = min(pathway_score_raw, 100.0)
 
-    async def rescore_all(
-        self,
-        db: AsyncSession,
-        weights: dict[str, float] | None = None,
-    ) -> dict[str, Any]:
-        """Rescore all existing hypotheses with current or provided weights.
-
-        Used when scoring weights change to update all composite scores.
-        """
-        if weights is None:
-            weights = await self.config.get_active_weights(db)
-
-        result = await db.execute(
-            select(Hypothesis).order_by(Hypothesis.id)
-        )
-        all_hypotheses = result.scalars().all()
-        total = len(all_hypotheses)
-
-        rescored = 0
-        for hyp in all_hypotheses:
-            try:
-                # Recompute composite from stored dimension scores
-                dimension_scores = {
-                    "pathway_overlap": {"score": hyp.pathway_overlap_score or 0},
-                    "expression_correlation": {"score": hyp.expression_correlation_score or 0},
-                    "literature_support": {"score": hyp.literature_support_score or 0},
-                    "clinical_evidence": {"score": hyp.clinical_evidence_score or 0},
-                    "safety": {"score": hyp.safety_score or 0},
-                    "novelty": {"score": hyp.novelty_score or 0},
-                    "causal_dependency": {"score": hyp.causal_dependency_score or 0},
-                    "gnn_link": {"score": hyp.gnn_link_score or 0},
-                    "mutation_context": {"score": hyp.mutation_context_score or 0},
-                    "polypharmacology": {"score": hyp.polypharmacology_score or 0},
-                    "pharmacological_response": {"score": hyp.pharmacological_response_score or 0},
-                }
-                new_composite = self.config.compute_composite_score(
-                    dimension_scores, weights
-                )
-                hyp.composite_score = new_composite
-                hyp.evidence_strength = self.config.determine_evidence_strength(
-                    new_composite
-                )
-                rescored += 1
-
-                if rescored % 100 == 0:
-                    await db.flush()
-
-            except Exception as e:
-                logger.debug("Failed rescoring hypothesis %d: %s", hyp.id, e)
-
-        await db.commit()
-        logger.info("Rescored %d/%d hypotheses", rescored, total)
-        return {"rescored": rescored, "total": total}
-
-    # ==================================================================
-    # Candidate Identification
-    # ==================================================================
-
-    async def _identify_candidates_for_cancer(
-        self,
-        cancer_type_id: int,
-        db: AsyncSession,
-    ) -> list[dict[str, Any]]:
-        """Identify candidate drugs for a cancer type using all 6 strategies.
-
-        Returns deduplicated list of {drug_id, drug_name, strategies: [...]}.
-        """
-        candidates: dict[int, dict] = {}  # drug_id -> info
-
-        # Strategy 1: Direct target
-        direct = await self._strategy_direct_target(cancer_type_id, db)
-        for d in direct:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            candidates[did]["strategies"].append("direct_target")
-
-        # Strategy 2: Pathway mediated
-        pathway = await self._strategy_pathway_mediated(cancer_type_id, db)
-        for d in pathway:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            if "pathway_mediated" not in candidates[did]["strategies"]:
-                candidates[did]["strategies"].append("pathway_mediated")
-
-        # Strategy 3: Interaction network
-        interaction = await self._strategy_interaction_network(cancer_type_id, db)
-        for d in interaction:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            if "interaction_network" not in candidates[did]["strategies"]:
-                candidates[did]["strategies"].append("interaction_network")
-
-        # Strategy 4: Expression driven
-        expression = await self._strategy_expression_driven(cancer_type_id, db)
-        for d in expression:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            if "expression_driven" not in candidates[did]["strategies"]:
-                candidates[did]["strategies"].append("expression_driven")
-
-        # Strategy 5: Literature seeded
-        literature = await self._strategy_literature_seeded(cancer_type_id, db)
-        for d in literature:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            if "literature_seeded" not in candidates[did]["strategies"]:
-                candidates[did]["strategies"].append("literature_seeded")
-
-        # Strategy 6: Analog discovery
-        analog = await self._strategy_analog_discovery(cancer_type_id, db)
-        for d in analog:
-            did = d["drug_id"]
-            if did not in candidates:
-                candidates[did] = {"drug_id": did, "drug_name": d["drug_name"], "strategies": []}
-            if "analog_discovery" not in candidates[did]["strategies"]:
-                candidates[did]["strategies"].append("analog_discovery")
-
-        return list(candidates.values())
-
-    async def _identify_strategies_for_pair(
-        self,
-        drug_id: int,
-        cancer_type_id: int,
-        db: AsyncSession,
-    ) -> list[str]:
-        """Quick check which strategies apply to a specific drug-cancer pair."""
-        strategies = []
-
-        # Direct target check
-        target_genes_result = await db.execute(
-            select(Target.gene_symbol)
-            .join(DrugTarget, DrugTarget.target_id == Target.id)
-            .where(DrugTarget.drug_id == drug_id)
-        )
-        drug_genes = set(row[0] for row in target_genes_result.all() if row[0])
-
-        if drug_genes:
-            # Check mutations
-            mut_result = await db.execute(
-                select(func.count(Mutation.id)).where(
-                    Mutation.cancer_type_id == cancer_type_id,
-                    Mutation.gene_symbol.in_(drug_genes),
-                )
-            )
-            if (mut_result.scalar() or 0) > 0:
-                strategies.append("direct_target")
-
-            # Check expression profiles
-            expr_result = await db.execute(
-                select(func.count(CancerMolecularProfile.id)).where(
-                    CancerMolecularProfile.cancer_type_id == cancer_type_id,
-                    CancerMolecularProfile.gene_symbol.in_(drug_genes),
-                )
-            )
-            if (expr_result.scalar() or 0) > 0:
-                strategies.append("expression_driven")
-
-        # Pathway check (lightweight)
-        analyzer = PathwayAnalyzer(db)
-        overlap = await analyzer.get_pathway_overlap(drug_id, cancer_type_id)
-        if overlap.get("shared_count", 0) > 0:
-            strategies.append("pathway_mediated")
-
-        # Literature check
-        lit_result = await db.execute(
-            select(func.count(Literature.id))
-            .join(LiteratureDrug, LiteratureDrug.literature_id == Literature.id)
-            .join(LiteratureCancer, LiteratureCancer.literature_id == Literature.id)
-            .where(
-                LiteratureDrug.drug_id == drug_id,
-                LiteratureCancer.cancer_type_id == cancer_type_id,
-            )
-        )
-        if (lit_result.scalar() or 0) > 0:
-            strategies.append("literature_seeded")
-
-        return strategies
-
-    # ------------------------------------------------------------------
-    # Individual Strategies
-    # ------------------------------------------------------------------
-
-    async def _strategy_direct_target(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 1: Drug directly targets a gene mutated/altered in the cancer."""
-        # Get cancer-altered genes
-        cancer_genes: set[str] = set()
-
-        mut_result = await db.execute(
-            select(Mutation.gene_symbol).where(
-                Mutation.cancer_type_id == cancer_type_id
-            ).distinct()
-        )
-        cancer_genes.update(row[0] for row in mut_result.all() if row[0])
-
-        profile_result = await db.execute(
-            select(CancerMolecularProfile.gene_symbol).where(
-                CancerMolecularProfile.cancer_type_id == cancer_type_id,
-                CancerMolecularProfile.alteration_type.in_(
-                    ["overexpression", "underexpression", "mutation"]
-                ),
-            ).distinct()
-        )
-        cancer_genes.update(row[0] for row in profile_result.all() if row[0])
-
-        if not cancer_genes:
-            return []
-
-        # Find drugs targeting these genes
-        result = await db.execute(
-            select(Drug.id, Drug.name)
-            .join(DrugTarget, DrugTarget.drug_id == Drug.id)
-            .join(Target, DrugTarget.target_id == Target.id)
-            .where(Target.gene_symbol.in_(cancer_genes))
-            .distinct()
+        # Composite
+        composite = (
+            W_TARGET * target_score +
+            W_PATHWAY * pathway_score +
+            W_CLINICAL * clinical_score
         )
 
-        return [{"drug_id": row[0], "drug_name": row[1]} for row in result.all()]
+        # Minimum threshold
+        if composite < 15:
+            return None
 
-    async def _strategy_pathway_mediated(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 2: Drug targets a gene in a pathway dysregulated in the cancer."""
-        analyzer = PathwayAnalyzer(db)
-        nodes = await analyzer.get_druggable_pathway_nodes(cancer_type_id)
-
-        seen: set[int] = set()
-        results = []
-        for node in nodes:
-            did = node["drug_id"]
-            if did not in seen:
-                seen.add(did)
-                results.append({
-                    "drug_id": did,
-                    "drug_name": node["drug_name"],
-                })
-        return results
-
-    async def _strategy_interaction_network(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 3: Drug target interacts with cancer-altered proteins via PPI.
-
-        Finds drugs whose targets have high-confidence STRING interactions
-        with genes mutated/altered in the cancer.
-        """
-        # Get cancer-altered gene uniprot IDs
-        cancer_genes_result = await db.execute(
-            select(Mutation.gene_symbol).where(
-                Mutation.cancer_type_id == cancer_type_id
-            ).distinct().limit(50)
-        )
-        cancer_genes = [row[0] for row in cancer_genes_result.all() if row[0]]
-
-        if not cancer_genes:
-            return []
-
-        # Get uniprot IDs for cancer genes
-        from app.models.target import ProteinInteraction
-
-        uniprot_result = await db.execute(
-            select(Target.uniprot_id).where(
-                Target.gene_symbol.in_(cancer_genes)
-            )
-        )
-        cancer_uniprots = set(row[0] for row in uniprot_result.all() if row[0])
-
-        if not cancer_uniprots:
-            return []
-
-        # Find proteins interacting with cancer genes (high confidence)
-        interacting_uniprots: set[str] = set()
-        for uniprot in list(cancer_uniprots)[:30]:
-            int_result = await db.execute(
-                select(
-                    ProteinInteraction.protein_a_uniprot,
-                    ProteinInteraction.protein_b_uniprot,
-                ).where(
-                    (ProteinInteraction.protein_a_uniprot == uniprot)
-                    | (ProteinInteraction.protein_b_uniprot == uniprot),
-                    ProteinInteraction.interaction_score >= 700,
-                ).limit(20)
-            )
-            for row in int_result.all():
-                neighbor = row[1] if row[0] == uniprot else row[0]
-                interacting_uniprots.add(neighbor)
-
-        # Remove cancer genes themselves
-        interacting_uniprots -= cancer_uniprots
-
-        if not interacting_uniprots:
-            return []
-
-        # Find drugs targeting these interacting proteins
-        result = await db.execute(
-            select(Drug.id, Drug.name)
-            .join(DrugTarget, DrugTarget.drug_id == Drug.id)
-            .join(Target, DrugTarget.target_id == Target.id)
-            .where(Target.uniprot_id.in_(interacting_uniprots))
-            .distinct()
-        )
-
-        return [{"drug_id": row[0], "drug_name": row[1]} for row in result.all()]
-
-    async def _strategy_expression_driven(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 4: Drug action aligns with expression changes.
-
-        Finds drugs where:
-        - Inhibitors target overexpressed genes
-        - Agonists target underexpressed genes
-        """
-        # Get overexpressed genes
-        over_result = await db.execute(
-            select(CancerMolecularProfile.gene_symbol).where(
-                CancerMolecularProfile.cancer_type_id == cancer_type_id,
-                CancerMolecularProfile.alteration_type == "overexpression",
-                CancerMolecularProfile.expression_zscore >= 2.0,
-            ).distinct().limit(100)
-        )
-        overexpressed = set(row[0] for row in over_result.all() if row[0])
-
-        # Get underexpressed genes
-        under_result = await db.execute(
-            select(CancerMolecularProfile.gene_symbol).where(
-                CancerMolecularProfile.cancer_type_id == cancer_type_id,
-                CancerMolecularProfile.alteration_type == "underexpression",
-                CancerMolecularProfile.expression_zscore <= -2.0,
-            ).distinct().limit(100)
-        )
-        underexpressed = set(row[0] for row in under_result.all() if row[0])
-
-        candidates = []
-
-        # Inhibitors for overexpressed genes
-        if overexpressed:
-            result = await db.execute(
-                select(Drug.id, Drug.name)
-                .join(DrugTarget, DrugTarget.drug_id == Drug.id)
-                .join(Target, DrugTarget.target_id == Target.id)
-                .where(
-                    Target.gene_symbol.in_(overexpressed),
-                    DrugTarget.action_type.ilike("%inhibit%"),
-                )
-                .distinct()
-            )
-            candidates.extend(
-                {"drug_id": row[0], "drug_name": row[1]}
-                for row in result.all()
-            )
-
-        # Agonists for underexpressed genes
-        if underexpressed:
-            result = await db.execute(
-                select(Drug.id, Drug.name)
-                .join(DrugTarget, DrugTarget.drug_id == Drug.id)
-                .join(Target, DrugTarget.target_id == Target.id)
-                .where(
-                    Target.gene_symbol.in_(underexpressed),
-                    DrugTarget.action_type.ilike("%agonist%"),
-                )
-                .distinct()
-            )
-            candidates.extend(
-                {"drug_id": row[0], "drug_name": row[1]}
-                for row in result.all()
-            )
-
-        # Deduplicate
-        seen: set[int] = set()
-        unique = []
-        for c in candidates:
-            if c["drug_id"] not in seen:
-                seen.add(c["drug_id"])
-                unique.append(c)
-        return unique
-
-    async def _strategy_literature_seeded(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 5: Literature mentions drug + cancer in repurposing context."""
-        result = await db.execute(
-            select(Drug.id, Drug.name)
-            .join(LiteratureDrug, LiteratureDrug.drug_id == Drug.id)
-            .join(Literature, LiteratureDrug.literature_id == Literature.id)
-            .join(LiteratureCancer, LiteratureCancer.literature_id == Literature.id)
-            .where(LiteratureCancer.cancer_type_id == cancer_type_id)
-            .distinct()
-        )
-
-        return [{"drug_id": row[0], "drug_name": row[1]} for row in result.all()]
-
-    async def _strategy_analog_discovery(
-        self, cancer_type_id: int, db: AsyncSession
-    ) -> list[dict]:
-        """Strategy 6: Similar drugs (by mechanism embedding) to known cancer drugs.
-
-        Finds drugs not yet associated with this cancer but whose mechanism
-        embeddings are close to drugs that ARE associated.
-        """
-        # Get drugs already associated with this cancer (via hypotheses or trials)
-        known_drug_ids: set[int] = set()
-
-        hyp_result = await db.execute(
-            select(Hypothesis.drug_id).where(
-                Hypothesis.cancer_type_id == cancer_type_id,
-                Hypothesis.composite_score >= 50,
-            )
-        )
-        known_drug_ids.update(row[0] for row in hyp_result.all())
-
-        trial_result = await db.execute(
-            select(TrialDrug.drug_id)
-            .join(ClinicalTrial, TrialDrug.trial_id == ClinicalTrial.id)
-        )
-        known_drug_ids.update(row[0] for row in trial_result.all())
-
-        if not known_drug_ids:
-            return []
-
-        # Get mechanism embeddings of known drugs
-        known_drugs_result = await db.execute(
-            select(Drug.id, Drug.mechanism_embedding).where(
-                Drug.id.in_(list(known_drug_ids)[:20]),
-                Drug.mechanism_embedding.isnot(None),
-            )
-        )
-        known_embeddings = known_drugs_result.all()
-
-        if not known_embeddings:
-            return []
-
-        # Find similar drugs by embedding distance
-        analog_drugs: set[int] = set()
-        for known_id, embedding in known_embeddings[:5]:
-            if embedding is None:
-                continue
-            try:
-                result = await db.execute(
-                    select(Drug.id, Drug.name)
-                    .where(
-                        Drug.id.notin_(known_drug_ids),
-                        Drug.mechanism_embedding.isnot(None),
-                    )
-                    .order_by(Drug.mechanism_embedding.cosine_distance(embedding))
-                    .limit(10)
-                )
-                for row in result.all():
-                    if row[0] not in analog_drugs:
-                        analog_drugs.add(row[0])
-            except Exception:
-                pass
-
-        if not analog_drugs:
-            return []
-
-        # Get drug info for analogs
-        result = await db.execute(
-            select(Drug.id, Drug.name).where(Drug.id.in_(analog_drugs))
-        )
-        return [{"drug_id": row[0], "drug_name": row[1]} for row in result.all()]
-
-    # ==================================================================
-    # Scoring & Storage
-    # ==================================================================
-
-    async def _score_and_store_hypothesis(
-        self,
-        drug_id: int,
-        cancer_type_id: int,
-        strategies: list[str],
-        weights: dict[str, float],
-        db: AsyncSession,
-    ) -> dict[str, Any] | None:
-        """Score a drug-cancer pair and store/update the hypothesis."""
-        # Get pathway data (shared across multiple scorers)
-        analyzer = PathwayAnalyzer(db)
-        pathway_data = await analyzer.get_pathway_overlap(drug_id, cancer_type_id)
-
-        # Score all 7 dimensions
-        dimension_scores = await self.scorer.score_all_dimensions(
-            drug_id, cancer_type_id, db, pathway_data=pathway_data
-        )
-
-        # Compute composite score
-        composite = self.config.compute_composite_score(dimension_scores, weights)
-        evidence_strength = self.config.determine_evidence_strength(composite)
-
-        # Generate title and summary
-        drug_result = await db.execute(
-            select(Drug.name).where(Drug.id == drug_id)
-        )
-        drug_name = drug_result.scalar_one_or_none() or f"Drug#{drug_id}"
-
-        cancer_result = await db.execute(
-            select(CancerType.name).where(CancerType.id == cancer_type_id)
-        )
-        cancer_name = cancer_result.scalar_one_or_none() or f"Cancer#{cancer_type_id}"
-
-        title = f"{drug_name} for {cancer_name}"
-        summary = self._generate_summary(
-            drug_name, cancer_name, strategies, dimension_scores, composite
-        )
+        # Build evidence summary
+        evidence_parts = []
+        if direct_overlap:
+            evidence_parts.append(f"Direct target overlap: {', '.join(sorted(direct_overlap))}")
+        if pathway_score > 20:
+            evidence_parts.append(f"Pathway connectivity score: {pathway_score:.0f}")
+        if clinical_score > 0:
+            evidence_parts.append(f"Clinical evidence score: {clinical_score:.0f}")
+        evidence_summary = ". ".join(evidence_parts) if evidence_parts else None
 
         # Upsert hypothesis
-        existing_result = await db.execute(
+        result = await self.db.execute(
             select(Hypothesis).where(
-                Hypothesis.drug_id == drug_id,
-                Hypothesis.cancer_type_id == cancer_type_id,
+                Hypothesis.drug_id == drug.id,
+                Hypothesis.cancer_type_id == cancer.id,
             )
         )
-        hypothesis = existing_result.scalar_one_or_none()
+        existing = result.scalar_one_or_none()
 
-        if hypothesis:
-            # Update existing
-            hypothesis.title = title
-            hypothesis.summary = summary
-            hypothesis.composite_score = composite
-            hypothesis.evidence_strength = evidence_strength
-            hypothesis.pathway_overlap_score = dimension_scores["pathway_overlap"]["score"]
-            hypothesis.expression_correlation_score = dimension_scores["expression_correlation"]["score"]
-            hypothesis.literature_support_score = dimension_scores["literature_support"]["score"]
-            hypothesis.clinical_evidence_score = dimension_scores["clinical_evidence"]["score"]
-            hypothesis.safety_score = dimension_scores["safety"]["score"]
-            hypothesis.novelty_score = dimension_scores["novelty"]["score"]
-            hypothesis.causal_dependency_score = dimension_scores["causal_dependency"]["score"]
-            hypothesis.gnn_link_score = dimension_scores.get("gnn_link", {}).get("score", 0)
-            hypothesis.mutation_context_score = dimension_scores.get("mutation_context", {}).get("score", 0)
-            hypothesis.polypharmacology_score = dimension_scores.get("polypharmacology", {}).get("score", 0)
-            hypothesis.pharmacological_response_score = dimension_scores.get("pharmacological_response", {}).get("score", 0)
+        if existing:
+            existing.composite_score = round(composite, 2)
+            existing.target_binding_score = round(target_score, 2)
+            existing.pathway_overlap_score = round(pathway_score, 2)
+            existing.clinical_evidence_score = round(clinical_score, 2)
+            existing.evidence_summary = evidence_summary
+            existing.strategy = strategy
+            hypothesis = existing
         else:
-            # Create new
             hypothesis = Hypothesis(
-                drug_id=drug_id,
-                cancer_type_id=cancer_type_id,
-                title=title,
-                summary=summary,
-                composite_score=composite,
-                evidence_strength=evidence_strength,
-                pathway_overlap_score=dimension_scores["pathway_overlap"]["score"],
-                expression_correlation_score=dimension_scores["expression_correlation"]["score"],
-                literature_support_score=dimension_scores["literature_support"]["score"],
-                clinical_evidence_score=dimension_scores["clinical_evidence"]["score"],
-                safety_score=dimension_scores["safety"]["score"],
-                novelty_score=dimension_scores["novelty"]["score"],
-                causal_dependency_score=dimension_scores["causal_dependency"]["score"],
-                gnn_link_score=dimension_scores.get("gnn_link", {}).get("score", 0),
-                mutation_context_score=dimension_scores.get("mutation_context", {}).get("score", 0),
-                polypharmacology_score=dimension_scores.get("polypharmacology", {}).get("score", 0),
-                pharmacological_response_score=dimension_scores.get("pharmacological_response", {}).get("score", 0),
+                drug_id=drug.id,
+                cancer_type_id=cancer.id,
+                composite_score=round(composite, 2),
+                target_binding_score=round(target_score, 2),
+                pathway_overlap_score=round(pathway_score, 2),
+                clinical_evidence_score=round(clinical_score, 2),
+                evidence_summary=evidence_summary,
+                strategy=strategy,
                 status="generated",
             )
-            db.add(hypothesis)
-            await db.flush()
+            self.db.add(hypothesis)
 
-        # Store evidence records
-        await self._store_evidence(hypothesis.id, dimension_scores, db)
+        await self.db.commit()
+        return hypothesis
 
-        return {
-            "hypothesis_id": hypothesis.id,
-            "drug_id": drug_id,
-            "cancer_type_id": cancer_type_id,
-            "title": title,
-            "composite_score": composite,
-            "evidence_strength": evidence_strength,
-            "strategies": strategies,
-            "dimension_scores": {
-                k: v["score"] for k, v in dimension_scores.items()
-            },
-        }
-
-    async def _store_evidence(
+    def _score_target_binding(
         self,
-        hypothesis_id: int,
-        dimension_scores: dict[str, dict[str, Any]],
-        db: AsyncSession,
-    ) -> None:
-        """Store evidence records for a hypothesis.
+        drug_targets: list[DrugTarget],
+        direct_overlap: set[str],
+        mutations: list[Mutation],
+    ) -> float:
+        """Score based on drug-target binding strength and overlap with cancer mutations."""
+        if not drug_targets:
+            return 0.0
 
-        Clears existing evidence and inserts fresh records from scoring.
-        """
-        # Delete existing evidence for this hypothesis
-        existing = await db.execute(
-            select(HypothesisEvidence).where(
-                HypothesisEvidence.hypothesis_id == hypothesis_id
+        score = 0.0
+
+        # Base score from binding affinity
+        best_affinity = None
+        for dt in drug_targets:
+            if dt.binding_affinity and dt.binding_affinity > 0:
+                if best_affinity is None or dt.binding_affinity < best_affinity:
+                    best_affinity = dt.binding_affinity
+
+        if best_affinity:
+            # Lower affinity (nM) = better binding = higher score
+            # < 10 nM → 80-100, 10-100 nM → 60-80, 100-1000 nM → 40-60
+            if best_affinity < 10:
+                score = 80 + min(20, (10 - best_affinity) * 2)
+            elif best_affinity < 100:
+                score = 60 + (100 - best_affinity) / 100 * 20
+            elif best_affinity < 1000:
+                score = 40 + (1000 - best_affinity) / 1000 * 20
+            else:
+                score = max(10, 40 - (best_affinity - 1000) / 10000 * 30)
+        else:
+            score = 30  # Default if no affinity data
+
+        # Bonus for direct target overlap with cancer mutations
+        if direct_overlap:
+            # Check mutation frequency for overlapping genes
+            mutation_map = {m.gene_symbol: m for m in mutations}
+            for gene in direct_overlap:
+                if gene in mutation_map:
+                    freq = mutation_map[gene].frequency or 0
+                    score += freq * 25  # Up to +25 per gene
+
+        return min(100.0, score)
+
+    async def _score_pathway_overlap(
+        self, target_genes: set[str], mutated_genes: set[str]
+    ) -> float:
+        """Score pathway connectivity between drug targets and cancer mutations."""
+        if not target_genes or not mutated_genes:
+            return 0.0
+
+        # Find pathways containing drug target genes
+        all_genes = list(target_genes | mutated_genes)
+        result = await self.db.execute(
+            select(PathwayTarget.pathway_id, PathwayTarget.gene_symbol).where(
+                PathwayTarget.gene_symbol.in_(all_genes)
             )
         )
-        for ev in existing.scalars().all():
-            await db.delete(ev)
-        await db.flush()
+        memberships = result.all()
 
-        # Insert new evidence from all dimensions
-        for dim_name, dim_result in dimension_scores.items():
-            for ev_data in dim_result.get("evidence", []):
-                evidence = HypothesisEvidence(
-                    hypothesis_id=hypothesis_id,
-                    evidence_type=ev_data.get("evidence_type", dim_name),
-                    source_type=ev_data.get("source_type"),
-                    source_id=ev_data.get("source_id"),
-                    description=ev_data.get("description"),
-                    strength=ev_data.get("strength", "weak"),
-                    confidence=ev_data.get("confidence", 0.0),
-                    raw_data=ev_data.get("raw_data"),
-                )
-                db.add(evidence)
+        # Group by pathway
+        pathway_genes: dict[int, set[str]] = {}
+        for pw_id, gene in memberships:
+            pathway_genes.setdefault(pw_id, set()).add(gene)
 
-    def _generate_summary(
-        self,
-        drug_name: str,
-        cancer_name: str,
-        strategies: list[str],
-        dimension_scores: dict[str, dict[str, Any]],
-        composite: float,
-    ) -> str:
-        """Generate a human-readable summary of the hypothesis."""
-        parts = [f"{drug_name} shows potential for repurposing against {cancer_name}."]
+        # Score: how many pathways connect drug targets to cancer mutations?
+        score = 0.0
+        connecting_pathways = 0
 
-        # Highlight discovery strategies
-        strategy_names = {
-            "direct_target": "direct target overlap",
-            "pathway_mediated": "pathway-mediated connection",
-            "interaction_network": "protein interaction network proximity",
-            "expression_driven": "expression-action compatibility",
-            "literature_seeded": "literature evidence",
-            "analog_discovery": "structural analog similarity",
-        }
-        strategy_text = ", ".join(
-            strategy_names.get(s, s) for s in strategies
+        for pw_id, genes_in_pathway in pathway_genes.items():
+            drug_genes_in_pw = target_genes & genes_in_pathway
+            cancer_genes_in_pw = mutated_genes & genes_in_pathway
+
+            if drug_genes_in_pw and cancer_genes_in_pw:
+                connecting_pathways += 1
+                # Score based on number of genes shared
+                overlap_size = len(drug_genes_in_pw) + len(cancer_genes_in_pw)
+                score += min(25, overlap_size * 8)
+
+        if connecting_pathways == 0:
+            return 0.0
+
+        # Bonus for multiple connecting pathways
+        score += min(25, (connecting_pathways - 1) * 12)
+
+        return min(100.0, score)
+
+    def _score_clinical_evidence(self, drug: Drug, cancer: CancerType) -> float:
+        """Score based on known clinical evidence for this drug-cancer pair."""
+        drug_lower = drug.name.lower()
+        cancer_lower = cancer.name.lower()
+
+        # Check known pairs
+        for (d, c), score in KNOWN_PAIRS.items():
+            if d == drug_lower and c in cancer_lower:
+                return float(score)
+
+        # Base score from drug approval status
+        if drug.status == "approved":
+            return 15.0
+        return 5.0
+
+    async def _update_log(self, **kwargs):
+        result = await self.db.execute(
+            select(IngestionLog).where(IngestionLog.id == self.log_id)
         )
-        parts.append(f"Identified via: {strategy_text}.")
-
-        # Highlight top scoring dimensions
-        scored = [
-            (name, data["score"])
-            for name, data in dimension_scores.items()
-            if data["score"] > 0
-        ]
-        scored.sort(key=lambda x: x[1], reverse=True)
-
-        if scored:
-            top = scored[0]
-            dim_labels = {
-                "pathway_overlap": "pathway overlap",
-                "expression_correlation": "expression correlation",
-                "literature_support": "literature support",
-                "clinical_evidence": "clinical evidence",
-                "safety": "safety profile",
-                "novelty": "novelty",
-                "causal_dependency": "causal dependency (DepMap)",
-                "pharmacological_response": "drug sensitivity screens (PRISM/GDSC)",
-            }
-            parts.append(
-                f"Strongest signal: {dim_labels.get(top[0], top[0])} "
-                f"(score: {top[1]}/100)."
-            )
-
-        parts.append(
-            f"Composite score: {composite}/100 "
-            f"({self.config.determine_evidence_strength(composite)})."
-        )
-
-        return " ".join(parts)
+        log = result.scalar_one_or_none()
+        if log:
+            for k, v in kwargs.items():
+                setattr(log, k, v)
+            await self.db.commit()

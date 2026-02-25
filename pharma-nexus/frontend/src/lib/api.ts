@@ -1,27 +1,19 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export async function fetchApi<T>(
-  endpoint: string,
-  options?: RequestInit,
-): Promise<T> {
-  const response = await fetch(`${API_URL}${endpoint}`, {
+export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,
     },
-    ...options,
   });
-
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const body = await response.json();
-      if (body.detail) detail = body.detail;
-    } catch {
-      // Response body wasn't JSON — use the status text fallback.
-    }
-    throw new Error(detail);
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
+  return res.json();
+}
 
-  return response.json();
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
 }
