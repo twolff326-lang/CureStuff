@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: pharma_nexus
       POSTGRES_PASSWORD: pharma_nexus
@@ -20,8 +20,6 @@ services:
       APP_DEBUG: "true"
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
     depends_on:
       - postgres
 
@@ -34,9 +32,6 @@ services:
       NEXT_PUBLIC_API_URL: "http://localhost:8000"
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
     depends_on:
       - backend
 
