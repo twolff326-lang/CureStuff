@@ -16,25 +16,16 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
-    networks:
-      - pharma-net
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pharma-nexus-backend
-    user: root
-    command: >
-      bash -c "
-        echo 'Waiting for database...' &&
-        alembic upgrade head &&
-        echo 'Migrations complete. Starting server...' &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-      "
+    command: ./start.sh --reload
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
-      - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
+      - DATABASE_URL=postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus
+      - DATABASE_URL_SYNC=postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus
       - APP_ENV=${APP_ENV:-development}
       - APP_DEBUG=${APP_DEBUG:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
@@ -46,14 +37,12 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
     restart: unless-stopped
-    networks:
-      - pharma-net
 
   frontend:
     build:
@@ -63,7 +52,7 @@ services:
     container_name: pharma-nexus-frontend
     command: npm run dev
     environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
     ports:
       - "3000:3000"
     volumes:
@@ -73,12 +62,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    networks:
-      - pharma-net
 
 volumes:
   postgres_data:
-
-networks:
-  pharma-net:
-    driver: bridge

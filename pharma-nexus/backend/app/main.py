@@ -58,4 +58,8 @@ async def health_check():
             await conn.execute(text("SELECT 1"))
         return {"status": "healthy", "version": "2.0.0"}
     except Exception as e:
-        return {"status": "unhealthy", "version": "2.0.0", "error": str(e)}
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "version": "2.0.0", "error": str(e)},
+        )
