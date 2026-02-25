@@ -1,67 +1,44 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: pharma-nexus-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-pharma_nexus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
-      POSTGRES_DB: ${POSTGRES_DB:-pharma_nexus}
+      POSTGRES_USER: pharma_nexus
+      POSTGRES_PASSWORD: pharma_nexus
+      POSTGRES_DB: pharma_nexus
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pharma_nexus}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
+      - pgdata:/var/lib/postgresql/data
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: pharma-nexus-backend
+    build: ./backend
     command: ./start.sh --reload
     environment:
-      - DATABASE_URL=postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus
-      - DATABASE_URL_SYNC=postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus
-      - APP_ENV=${APP_ENV:-development}
-      - APP_DEBUG=${APP_DEBUG:-true}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      DATABASE_URL: postgresql+asyncpg://pharma_nexus:pharma_nexus@postgres:5432/pharma_nexus
+      DATABASE_URL_SYNC: postgresql+psycopg2://pharma_nexus:pharma_nexus@postgres:5432/pharma_nexus
+      CORS_ORIGINS: "http://localhost:3000"
+      APP_DEBUG: "true"
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
     depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: unless-stopped
+      - postgres
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
       target: dev
-    container_name: pharma-nexus-frontend
     command: npm run dev
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      NEXT_PUBLIC_API_URL: "http://localhost:8000"
     ports:
       - "3000:3000"
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
     depends_on:
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
+      - backend
 
 volumes:
-  postgres_data:
+  pgdata:
