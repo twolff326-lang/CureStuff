@@ -12,9 +12,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pharma_nexus}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
     networks:
       - pharma-net
@@ -24,7 +24,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pharma-nexus-backend
-    command: bash -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    user: root
+    command: >
+      bash -c "
+        echo 'Waiting for database...' &&
+        alembic upgrade head &&
+        echo 'Migrations complete. Starting server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
       - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql+psycopg2://pharma_nexus:change_me_in_production@postgres:5432/pharma_nexus}
@@ -40,10 +47,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
     networks:
       - pharma-net
@@ -60,18 +67,11 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
     depends_on:
       backend:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     restart: unless-stopped
     networks:
       - pharma-net
